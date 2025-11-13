@@ -1,1 +1,1 @@
-# connect4-moderator-server
+# Connect4 Moderator - Server
