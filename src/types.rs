@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::Message;
@@ -33,7 +35,7 @@ impl Client {
 		}
 	}
 
-	pub fn send(&self, text: String) -> Result<(), SendError<Message>> {
+	pub fn send(&self, text: &str) -> Result<(), SendError<Message>> {
 		self.connection.send(Message::text(text))
 	}
 }
@@ -51,14 +53,42 @@ impl AI {
 }
 
 pub struct Match {
-	pub id: u32,
 	pub board: Vec<Vec<Color>>,
+	pub viewers: Vec<SocketAddr>,
 	pub player1: AI,
 	pub player2: AI,
 }
 
 impl Match {
-	pub fn new(id: u32, player1: AI, player2: AI) -> Match {
-		Match { id, board: Vec::new(), player1, player2 }
+	pub fn new(player1: AI, player2: AI) -> Match {
+		Match { board: Vec::new(), viewers: Vec::new(), player1, player2 }
+	}
+}
+
+pub struct MatchMaker {
+	pub matches: HashMap<u32, Match>,
+	pub ready_players: Vec<AI>,
+}
+
+impl MatchMaker {
+	pub fn new() -> MatchMaker {
+		MatchMaker { matches: HashMap::new(), ready_players: Vec::new() }
+	}
+
+	pub fn watch(&mut self, viewer: SocketAddr, match_id: u32) {
+		for aMatch in &mut self.matches.values_mut() {
+			let mut found = false;
+			for i in 0..aMatch.viewers.len() {
+				if aMatch.viewers[i] == viewer {
+					aMatch.viewers.remove(i);
+					found = true;
+					break;
+				}
+			}
+
+			if found { break; }
+		}
+
+		self.matches.get_mut(&match_id).unwrap().viewers.push(viewer);
 	}
 }
