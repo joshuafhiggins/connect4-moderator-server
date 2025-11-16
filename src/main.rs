@@ -1,19 +1,22 @@
 mod types;
 
-use crate::types::{Color, MatchMaker, Role, AI};
+use crate::types::{Color, Match};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::num::ParseIntError;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 use types::Client;
 
 type Clients = Arc<RwLock<HashMap<SocketAddr, Client<'static>>>>;
+type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
+type Matches = Arc<RwLock<HashMap<u32, Match<'static>>>>;
+
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -24,15 +27,17 @@ async fn main() -> Result<(), anyhow::Error> {
     let listener = TcpListener::bind(&addr).await?;
     info!("WebSocket server listening on: {}", addr);
 
-    let mut clients: Clients = Arc::new(RwLock::new(HashMap::new()));
-    let mut match_maker: Arc<RwLock<MatchMaker>> = Arc::new(RwLock::new(MatchMaker::new()));
+    let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+	let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
+    let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
             stream,
             addr,
             clients.clone(),
-            match_maker.clone(),
+			observers.clone(),
+            matches.clone(),
         ));
     }
 
@@ -43,7 +48,8 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     clients: Clients,
-    match_maker: Arc<RwLock<MatchMaker>>,
+	observers: Observers,
+    matches: Matches,
 ) -> Result<(), anyhow::Error> {
     info!("New WebSocket connection from: {}", addr);
 
@@ -53,10 +59,10 @@ async fn handle_connection(
 
     // Store the client
     {
-        clients
+        observers
             .write()
             .await
-            .insert(addr, Client::new(String::new(), Role::Observer, tx));
+            .insert(addr, tx.clone());
     }
 
     // Spawn task to handle outgoing messages
@@ -78,141 +84,83 @@ async fn handle_connection(
                     let requested_username = text.split(":").collect::<Vec<&str>>()[1].to_string();
                     let mut is_taken = false;
                     for client in clients.read().await.values() {
-                        if let Some(username) = &client.username {
-                            if *username == requested_username {
-								let _ = clients
-									.read()
-									.await
-									.get(&addr)
-									.unwrap()
-									.send(&format!("ERROR:INVALID:ID:{}", requested_username));
-                                is_taken = true;
-                                break;
-                            }
+                        if requested_username == client.username {
+							let _ = send(&tx, &format!("ERROR:INVALID:ID:{}", requested_username));
+							is_taken = true;
+							break;
                         }
                     }
 
                     if is_taken { continue; }
 
                     // not taken
-                    clients.write().await.get_mut(&addr).unwrap().role = Role::Player;
-                    clients.write().await.get_mut(&addr).unwrap().username = Some(requested_username);
+					observers.write().await.remove(&addr);
+                    clients.write().await.insert(addr.to_string().parse()?, Client::new(requested_username, tx.clone()));
 
-					let _ = clients
-						.read()
-						.await
-						.get(&addr)
-						.unwrap()
-						.send("CONNECT:ACK");
+					let _ = send(&tx, "CONNECT:ACK");
                 }
 				else if text.starts_with("READY") {
-                    if clients.read().await.get(&addr).unwrap().role != Role::Player {
-                        let _ = clients
-                            .read()
-                            .await
-                            .get(&addr)
-                            .unwrap()
-                            .send("ERROR:INVALID");
+                    if clients.read().await.get(&addr).is_none() {
+                        let _ = send(&tx, "ERROR:INVALID");
                         continue;
                     }
 
-					let mut already_ready = false;
-					for ready_player in &match_maker.read().await.ready_players {
-						if ready_player.username.eq(clients.read().await.get(&addr).unwrap().username.as_ref().unwrap()) {
-							let _ = clients
-								.read()
-								.await
-								.get(&addr)
-								.unwrap()
-								.send("ERROR:INVALID");
-							already_ready = true;
-							break;
-						}
+					if clients.read().await.get(&addr).unwrap().ready {
+						let _ = send(&tx, "ERROR:INVALID");
+						continue;
 					}
 
-					if already_ready { continue; }
+					clients.write().await.get_mut(&addr).unwrap().ready = true;
 
-                    match_maker.write().await.ready_players.push(AI::new(
-                        clients
-                            .read()
-                            .await
-                            .get(&addr)
-                            .unwrap()
-                            .username
-                            .as_ref()
-                            .unwrap(),
-                        Color::None,
-						addr.to_string()
-                    ));
-
-					let _ = clients
-						.read()
-						.await
-						.get(&addr)
-						.unwrap()
-						.send("READY:ACK");
+					let _ = send(&tx,"READY:ACK");
                 }
 				else if text.starts_with("PLAY") {
 					let read = clients.read().await;
-					let client = read.get(&addr).unwrap();
+					let client = read.get(&addr);
 
 					// Check if client is valid
-					if client.role != Role::Player || client.current_match.is_none() {
-						let _ = clients
-							.read()
-							.await
-							.get(&addr)
-							.unwrap()
-							.send("ERROR:INVALID:MOVE");
+					if client.is_none() || client.unwrap().current_match.is_none() {
+						let _ = send(&tx, "ERROR:INVALID:MOVE");
 						continue;
 					}
 
-					let current_match = client.current_match.unwrap();
-					let ai = if *client.username.as_ref().unwrap() == current_match.player1.username
-					{ &current_match.player1 } else { &current_match.player2 };
-					let opponent = if *client.username.as_ref().unwrap() == current_match.player1.username
-					{ &current_match.player2 } else { &current_match.player1 };
+					let current_match = client.unwrap().current_match.unwrap();
+					let current_player = if client.unwrap().username == current_match.player1.username
+					{ current_match.player1 } else { current_match.player2 };
+					let opponent = if client.unwrap().username == current_match.player1.username
+					{ current_match.player2 } else { current_match.player1 };
 
 					// Check if it's their move
 					if (current_match.ledger.is_empty() &&
-						current_match.first.username != *client.username.as_ref().unwrap()) ||
-						(client.current_match.unwrap().ledger.last().unwrap().0.username == *client.username.as_ref().unwrap())
+						current_match.first.username != client.unwrap().username) ||
+						(client.unwrap().current_match.unwrap().ledger.last().unwrap().0.username == client.unwrap().username)
 					{
-						let _ = clients
-							.read()
-							.await
-							.get(&addr)
-							.unwrap()
-							.send("ERROR:INVALID:MOVE");
+						let _ = send(&tx, "ERROR:INVALID:MOVE");
 						continue;
 					}
 
+					let column_parse = text.split(":").collect::<Vec<&str>>()[1].parse::<usize>();
+
 					// Check if valid move
-					if let Ok(column) = text.split(":").collect::<Vec<&str>>()[1].parse::<usize>() {
+					if let Ok(column) = column_parse {
 						if current_match.board[column][4] != Color::None {
-							let _ = clients
-								.read()
-								.await
-								.get(&addr)
-								.unwrap()
-								.send("ERROR:INVALID:MOVE");
+							let _ = send(&tx, "ERROR:INVALID:MOVE");
 							continue;
 						}
 
 						// Place it
 						for i in 0..current_match.board[column].len() {
 							if current_match.board[column][i] == Color::None {
-								match_maker.write().await.matches.get_mut(&current_match.id).unwrap().board[column][i] = ai.color.clone();
+								matches
+									.write()
+									.await
+									.get_mut(&current_match.id).unwrap()
+									.board[column][i] = current_player.color.clone();
 								break;
 							}
 						}
 					} else {
-						let _ = clients
-							.read()
-							.await
-							.get(&addr)
-							.unwrap()
-							.send("ERROR:INVALID:MOVE");
+						let _ = send(&tx, "ERROR:INVALID:MOVE");
 						continue;
 					}
 
@@ -256,84 +204,38 @@ async fn handle_connection(
 					};
 
 					if winner != Color::None {
-						if winner == ai.color {
-							let _ = clients
-								.read()
-								.await
-								.get(&addr)
-								.unwrap()
-								.send("GAME:WINS");
+						if winner == current_player.color {
+							let _ = send(&tx, "GAME:WINS");
+							let _ = send(&opponent.connection, "GAME:LOSS");
 
-							let _ = clients
-								.read()
-								.await
-								.get(&SocketAddr::from_str(&opponent.addr)?)
-								.unwrap()
-								.send("GAME:LOSS");
 						} else {
-							let _ = clients
-								.read()
-								.await
-								.get(&addr)
-								.unwrap()
-								.send("GAME:LOSS");
+							let _ = send(&tx, "GAME:LOSS");
+							let _ = send(&opponent.connection, "GAME:WINS");
 
-							let _ = clients
-								.read()
-								.await
-								.get(&SocketAddr::from_str(&opponent.addr)?)
-								.unwrap()
-								.send("GAME:WINS");
 						}
 					}
 					else if filled {
-						let _ = clients
-							.read()
-							.await
-							.get(&addr)
-							.unwrap()
-							.send("GAME:DRAW");
-
-						let _ = clients
-							.read()
-							.await
-							.get(&SocketAddr::from_str(&opponent.addr)?)
-							.unwrap()
-							.send("GAME:DRAW");
+						let _ = send(&tx, "GAME:DRAW");
+						let _ = send(&opponent.connection, "GAME:DRAW");
 					}
 					else {
-						let _ = clients
-							.read()
-							.await
-							.get(&SocketAddr::from_str(&opponent.addr)?)
-							.unwrap()
-							.send(&format!("OPPONENT:{}", text.split(":").collect::<Vec<&str>>()[1].parse::<usize>()?));
+						let _ = send(&opponent.connection, &format!("OPPONENT:{}", column_parse?));
 					}
 
 					// TODO: remove match from matchmaker
 					// TODO: broadcast moves to viewers
 				}
 				else {
-                    let _ = clients
-                        .read()
-                        .await
-                        .get(&addr)
-                        .unwrap()
-                        .send("ERROR:UNKNOWN");
-                }
+					let _ = send(&tx, "GAME:UNKNOWN");
+				}
             }
             Ok(Message::Close(_)) => {
                 info!("Client {} disconnected", addr);
                 break;
             }
             Ok(_) => {
-                let _ = clients
-                    .read()
-                    .await
-                    .get(&addr)
-                    .unwrap()
-                    .send("ERROR:UNKNOWN");
-            }
+				let _ = send(&tx, "GAME:UNKNOWN");
+			}
             Err(e) => {
                 error!("WebSocket error for {}: {}", addr, e);
                 break;
@@ -353,11 +255,30 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn broadcast_message(clients: &Clients, msg: Message) {
-    let clients = clients.read().await;
-    for (_, client) in clients.iter() {
-        if client.role == Role::Admin || client.role == Role::Observer {
-            client.connection.send(msg.clone()).ok();
-        }
-    }
+async fn broadcast_message(observers: &Observers, msg: &str) {
+    let observers = observers.read().await;
+    for (_, tx) in observers.iter() {
+		let _ = send(tx, msg);
+	}
+}
+
+async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) {
+	for a_match in &mut matches.write().await.values_mut() {
+		let mut found = false;
+		for i in 0..a_match.viewers.len() {
+			if a_match.viewers[i] == addr {
+				a_match.viewers.remove(i);
+				found = true;
+				break;
+			}
+		}
+
+		if found { break; }
+	}
+
+	matches.write().await.get_mut(&new_match_id).unwrap().viewers.push(addr);
+}
+
+fn send(tx: &UnboundedSender<Message>, text: &str) -> Result<(), SendError<Message>> {
+	tx.send(Message::text(text))
 }
