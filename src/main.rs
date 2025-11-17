@@ -232,15 +232,15 @@ async fn handle_connection(
 								}
 
 								for i in 0..4 {
-									if x + i < 6 && current_match.board[x + i][y] != color && horizontal_end {
+									if x + i >= 6 || current_match.board[x + i][y] != color && horizontal_end {
 										horizontal_end = false;
 									}
 
-									if y + i < 5 && current_match.board[x][y + i] != color && vertical_end{
+									if y + i >= 5 || current_match.board[x][y + i] != color && vertical_end {
 										vertical_end = false;
 									}
 
-									if x + i < 6 && y + i < 5 && current_match.board[x + i][y + i] != color && diagonal_end {
+									if x + i >= 6 || y + i >= 5 || current_match.board[x + i][y + i] != color && diagonal_end {
 										diagonal_end = false;
 									}
 								}
