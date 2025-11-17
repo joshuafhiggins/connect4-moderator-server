@@ -191,6 +191,11 @@ async fn handle_connection(
 
 					// Check if valid move
 					if let Ok(column) = column_parse {
+						if column >= 6 {
+							let _ = send(&tx, "ERROR:INVALID:MOVE");
+							continue;
+						}
+
 						if current_match.board[column][4] != Color::None {
 							let _ = send(&tx, "ERROR:INVALID:MOVE");
 							continue;
