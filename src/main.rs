@@ -36,6 +36,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 	let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
+	let admin: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -44,6 +45,7 @@ async fn main() -> Result<(), anyhow::Error> {
             clients.clone(),
 			observers.clone(),
             matches.clone(),
+			admin.clone(),
 			demo_mode
         ));
     }
@@ -57,6 +59,7 @@ async fn handle_connection(
     clients: Clients,
 	observers: Observers,
     matches: Matches,
+	admin: Arc<RwLock<Option<SocketAddr>>>,
 	demo_mode: bool,
 ) -> Result<(), anyhow::Error> {
     info!("New WebSocket connection from: {}", addr);
@@ -69,7 +72,7 @@ async fn handle_connection(
 	observers.write().await.insert(addr, tx.clone());
 
     // Spawn task to handle outgoing messages
-    let mut send_task = tokio::spawn(async move {
+    let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if ws_sender.send(msg).await.is_err() {
                 break;
@@ -350,11 +353,41 @@ async fn handle_connection(
     // Clean up
     send_task.abort();
 
-    // TODO: Remove and terminate any matches
+    // Remove and terminate any matches
+	if let Some(match_id) = clients.read().await.get(&addr).unwrap().read().await.current_match {
+		let matches_guard = matches.read().await;
+		let clients_guard = clients.read().await;
+		let the_match = matches_guard.get(&match_id).unwrap().read().await;
+
+		let player1 = clients_guard.get(&the_match.player1).unwrap().read().await;
+		let player2 = clients_guard.get(&the_match.player2).unwrap().read().await;
+
+		let _ = send(&player1.connection, "GAME:TERMINATED");
+		let _ = send(&player2.connection, "GAME:TERMINATED");
+
+		broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
+
+		drop(player1);
+		drop(player2);
+		drop(the_match);
+		drop(matches_guard);
+		drop(clients_guard);
+
+		matches.write().await.remove(&match_id);
+	}
 
     clients.write().await.remove(&addr);
+	observers.write().await.remove(&addr);
 
-    info!("Client {} removed", addr);
+	let mut admin_guard = admin.write().await;
+	if let Some(admin_addr) = *admin_guard {
+		if admin_addr == addr {
+			*admin_guard = None;
+		}
+	}
+	drop(admin_guard);
+
+	info!("Client {} removed", addr);
 
     Ok(())
 }
