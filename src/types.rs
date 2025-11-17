@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::vec;
 use rand::Rng;
@@ -13,22 +12,27 @@ pub enum Color {
 	None,
 }
 
-pub struct Client<'a> {
+#[derive(Clone)]
+pub struct Client {
 	pub username: String,
     pub connection: UnboundedSender<Message>,
 	pub ready: bool,
 	pub color: Color,
-	pub current_match: Option<&'a Match<'static>>,
+	pub current_match: Option<u32>,
+	pub demo: bool,
+	pub addr: SocketAddr,
 }
 
-impl Client<'static> {
-	pub fn new(username: String, connection: UnboundedSender<Message>) -> Client<'static> {
+impl Client {
+	pub fn new(username: String, connection: UnboundedSender<Message>, addr: SocketAddr) -> Client {
 		Client {
 			username,
 			connection,
 			ready: false,
 			color: Color::None,
 			current_match: None,
+			demo: false,
+			addr,
 		}
 	}
 
@@ -37,19 +41,28 @@ impl Client<'static> {
 	}
 }
 
-pub struct Match<'a> {
+pub struct Match {
 	pub id: u32,
 	pub board: Vec<Vec<Color>>,
 	pub viewers: Vec<SocketAddr>,
-	pub ledger: Vec<(&'a Client<'a>, usize)>,
-	pub first: &'a Client<'a>,
-	pub player1: &'a Client<'a>,
-	pub player2: &'a Client<'a>,
+	pub ledger: Vec<(Color, usize)>,
+	pub first: SocketAddr,
+	pub player1: SocketAddr,
+	pub player2: SocketAddr,
 }
 
-impl<'a> Match<'a> {
-	pub fn new(id: u32, player1: &'a Client, player2: &'a Client) -> Match<'a> {
-		let first = if rand::rng().random_range(0..=1) == 0 { player1 } else { player2 };
+impl Match {
+	pub fn new(id: u32, player1: SocketAddr, player2: SocketAddr) -> Match {
+		let first = if rand::rng().random_range(0..=1) == 0 { player1.clone() } else { player2.clone() };
 		Match { id, board: vec![vec![Color::None; 5]; 6], viewers: Vec::new(), ledger: Vec::new(), first, player1, player2 }
+	}
+	
+	pub fn place_token(&mut self, color: Color, column: usize) {
+		for i in 0..5 {
+			if self.board[column][i] == Color::None {
+				self.board[column][i] = color;
+				break;
+			}
+		}
 	}
 }
