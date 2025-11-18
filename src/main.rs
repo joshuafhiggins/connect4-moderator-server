@@ -379,13 +379,13 @@ async fn handle_connection(
                 info!("Client {} disconnected", addr);
                 break;
             }
-            Ok(_) => {
-                let _ = send(&tx, "ERROR:UNKNOWN");
-            }
+            Ok(Message::Ping(b)) => { let _ = tx.send(Message::Pong(b)); }
+            Ok(Message::Binary(_)) => { let _ = send(&tx, "ERROR:UNKNOWN"); }
+			Ok(_) => { info!("Received pong/frame? Something fishy is happening") },
             Err(e) => {
                 error!("WebSocket error for {}: {}", addr, e);
                 break;
-            }
+            },
         }
     }
 
