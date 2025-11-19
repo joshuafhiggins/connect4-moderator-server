@@ -367,7 +367,7 @@ async fn handle_connection(
 						broadcast_message(
 							&current_match.viewers,
 							&observers,
-							&format!("GAME:MOVE:{}:{}", "demo", column_parse.clone()?),
+							&format!("GAME:MOVE:{}:{}", "demo", random_move),
 						).await;
                     }
                 }
