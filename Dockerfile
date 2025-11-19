@@ -11,4 +11,6 @@ COPY ./Cargo.toml .
 
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
+ENV ADMIN_AUTH=""
+
 ENTRYPOINT ["./target/x86_64-unknown-linux-musl/release/connect4-moderator-server", "demo"]

@@ -1,0 +1,1 @@
+docker stop connect4-moderator-server && docker rm connect4-moderator-server && docker image rm joshuafhiggins/connect4-moderator-server:latest && ./docker_build.sh && ./docker_run.sh

@@ -50,9 +50,9 @@ async def gameloop(socket):
         col = calculate_move(message[1], board, our_color, opponent_color)  # Give your function your opponent's move
         await socket.send(f'PLAY:{col}')  # Send your move to the sever
 
-      case 'KICK':
-        print("You have been kicked from the game")
-        break
+      # case 'KICK':
+      #   print("You have been kicked from the game")
+      #   break
 
       case 'ERROR':
         print(f"{message[0]}: {':'.join(message[1:])}")

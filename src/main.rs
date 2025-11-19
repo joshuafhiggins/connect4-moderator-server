@@ -6,17 +6,23 @@ use crate::types::{Color, Match};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use std::collections::HashMap;
+use std::env;
 use std::net::SocketAddr;
+use std::num::ParseIntError;
+use std::process::abort;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tracing::{error, info, warn};
 use types::Client;
 
 type Clients = Arc<RwLock<HashMap<SocketAddr, Arc<RwLock<Client>>>>>;
+type Usernames = Arc<RwLock<HashMap<String, SocketAddr>>>;
 type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
 type Matches = Arc<RwLock<HashMap<u32, Arc<RwLock<Match>>>>>;
 
@@ -25,14 +31,17 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize logging
     tracing_subscriber::fmt::init();
 
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
+	let admin_password = env::var("ADMIN_PASSWORD").unwrap_or_else(|_| String::from("admin"));
+	let admin_password = Arc::new(admin_password);
 
     let addr = "0.0.0.0:8080";
     let listener = TcpListener::bind(&addr).await?;
     info!("WebSocket server listening on: {}", addr);
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+	let usernames: Usernames = Arc::new(RwLock::new(HashMap::new()));
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
     let admin: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
@@ -42,9 +51,11 @@ async fn main() -> Result<(), anyhow::Error> {
             stream,
             addr,
             clients.clone(),
+			usernames.clone(),
             observers.clone(),
             matches.clone(),
             admin.clone(),
+			admin_password.clone(),
             demo_mode,
         ));
     }
@@ -56,9 +67,11 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     clients: Clients,
+	usernames: Usernames,
     observers: Observers,
     matches: Matches,
     admin: Arc<RwLock<Option<SocketAddr>>>,
+	admin_password: Arc<String>,
     demo_mode: bool,
 ) -> Result<(), anyhow::Error> {
     info!("New WebSocket connection from: {}", addr);
@@ -73,7 +86,7 @@ async fn handle_connection(
     // Spawn task to handle outgoing messages
     let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_sender.send(msg).await.is_err() {
+            if ws_sender.send(msg.clone()).await.is_err() {
                 break;
             }
         }
@@ -108,6 +121,7 @@ async fn handle_connection(
 
                     // not taken
                     observers.write().await.remove(&addr);
+					usernames.write().await.insert(requested_username.clone(), addr);
                     clients.write().await.insert(
                         addr.to_string().parse()?,
                         Arc::new(RwLock::new(Client::new(
@@ -350,17 +364,72 @@ async fn handle_connection(
                         let _ = send(&tx, &format!("OPPONENT:{}", random_move));
                     }
                 }
+
 				else if text == "GAME:LIST" {
-                    todo!()
+					let matches_guard = matches.read().await;
+					let clients_guard = clients.read().await;
+					let mut to_send = "GAME:LIST:".to_string();
+					for match_guard in matches_guard.values() {
+						let a_match = match_guard.read().await;
+						let player1 = clients_guard.get(&a_match.player1).unwrap().read().await;
+						let player2 = clients_guard.get(&a_match.player2).unwrap().read().await;
+						to_send += a_match.id.to_string().as_str();
+						to_send += ","; to_send += player1.username.as_str(); to_send += ",";
+						to_send += player2.username.as_str(); to_send += "|";
+					}
+
+					to_send.remove(to_send.len() - 1);
+
+                    let _ = send(&tx, to_send.as_str());
                 }
 				else if text.starts_with("GAME:WATCH:") {
-                    todo!()
+					let match_id_parse = text.split(":").collect::<Vec<&str>>()[2].parse::<u32>();
+					match match_id_parse {
+						Ok(match_id) => {
+							let result = watch(&matches, match_id, addr).await;
+							if result.is_err() { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
+						}
+						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
+					}
                 }
+
 				else if text.starts_with("ADMIN:AUTH:") {
-                    todo!()
+					if admin.read().await.is_some() {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
+					let password_parse = text.split(":").collect::<Vec<&str>>()[2];
+					if password_parse != *admin_password {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
+					let mut admin_guard = admin.write().await;
+					*admin_guard = Some(addr.to_string().parse()?);
                 }
 				else if text.starts_with("ADMIN:KICK:") {
-                    todo!()
+					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
+					let kick_username = text.split(":").collect::<Vec<&str>>()[2];
+
+					let usernames_guard = usernames.read().await;
+					let clients_guard = clients.read().await;
+
+					let kick_addr_result = usernames_guard.get(kick_username);
+					match kick_addr_result {
+						Some(kick_addr) => {
+							let kick_client = clients_guard.get(kick_addr).unwrap().read().await;
+							kick_client.connection.send(Message::Close(None))?;
+						},
+						None => {
+							let _ = send(&tx, "ERROR:INVALID:KICK");
+							continue
+						}
+					}
                 }
 				else if text == "GAME:TERMINATE" {
                     todo!()
@@ -437,8 +506,10 @@ async fn broadcast_message(addrs: &Vec<SocketAddr>, observers: &Observers, msg: 
     }
 }
 
-async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) {
-    for a_match in &mut matches.write().await.values_mut() {
+async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
+	let mut matches_guard = matches.write().await;
+
+    for a_match in &mut matches_guard.values_mut() {
         let mut found = false;
         for i in 0..a_match.write().await.viewers.len() {
             if a_match.write().await.viewers[i] == addr {
@@ -453,7 +524,13 @@ async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) {
         }
     }
 
-    matches.write().await.get_mut(&new_match_id).unwrap().write().await.viewers.push(addr);
+	let result = matches_guard.get(&new_match_id);
+	if result.is_none() {
+		return Err("Match not found".to_string());
+	}
+    result.unwrap().write().await.viewers.push(addr);
+
+	Ok(())
 }
 
 fn send(tx: &UnboundedSender<Message>, text: &str) -> Result<(), SendError<Message>> {
