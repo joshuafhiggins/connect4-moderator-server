@@ -1,5 +1,5 @@
 docker run -d \
-  --env-file ./.env
+  --env-file ./.env \
   --name=connect4-moderator-server \
   --restart unless-stopped \
   -e ADMIN_AUTH="${ADMIN_AUTH}" \
