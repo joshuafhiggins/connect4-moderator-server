@@ -362,6 +362,11 @@ async fn handle_connection(
                         let random_move = random_move(&current_match.board);
                         current_match.place_token(Color::Blue, random_move);
                         let _ = send(&tx, &format!("OPPONENT:{}", random_move));
+						broadcast_message(
+							&current_match.viewers,
+							&observers,
+							&format!("GAME:MOVE:{}:{}", "demo", column_parse.clone()?),
+						).await;
                     }
                 }
 
@@ -375,7 +380,8 @@ async fn handle_connection(
 						let player2 = clients_guard.get(&a_match.player2).unwrap().read().await;
 						to_send += a_match.id.to_string().as_str();
 						to_send += ","; to_send += player1.username.as_str(); to_send += ",";
-						to_send += player2.username.as_str(); to_send += "|";
+						to_send += (if player1.username == player2.username { "demo" } else { player2.username.as_str() });
+						to_send += "|";
 					}
 
 					to_send.remove(to_send.len() - 1);
