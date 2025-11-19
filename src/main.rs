@@ -432,7 +432,40 @@ async fn handle_connection(
 					}
                 }
 				else if text == "GAME:TERMINATE" {
-                    todo!()
+					let match_id_request = get_current_watching_match(&matches, addr).await;
+
+					match match_id_request {
+						Some(match_id) => {
+							let match_guard = matches.read().await;
+							let the_match = match_guard.get(&match_id).unwrap().read().await;
+							let player1_addr = the_match.player1;
+							let player2_addr = the_match.player2;
+							broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
+							drop(the_match);
+							drop(match_guard);
+
+							let clients_guard = clients.write().await;
+
+							let mut player1 = clients_guard.get(&player1_addr).unwrap().write().await;
+							player1.current_match = None;
+							player1.color = Color::None;
+							let _ = send(&player1.connection, "GAME:TERMINATED");
+							drop(player1);
+
+							let mut player2 = clients_guard.get(&player2_addr).unwrap().write().await;
+							player2.current_match = None;
+							player2.color = Color::None;
+							let _ = send(&player2.connection, "GAME:TERMINATED");
+							drop(player2);
+
+							drop(clients_guard);
+
+							matches.write().await.remove(&match_id);
+						},
+						None => {
+							let _ = send(&tx, "ERROR:INVALID:TERMINATE");
+						}
+					}
                 }
 				else if text.starts_with("GAME:AUTOPLAY:") {
                     todo!()
@@ -440,6 +473,9 @@ async fn handle_connection(
 				else if text == "GAME:CONTINUE" {
                     todo!()
                 }
+
+				// TODO: Start tournaments
+
 				else {
                     let _ = send(&tx, "ERROR:UNKNOWN");
                 }
@@ -462,6 +498,7 @@ async fn handle_connection(
     send_task.abort();
 
     // Remove and terminate any matches
+	// TODO: Support reconnecting behaviors
     if let Some(match_id) = clients.read().await.get(&addr).unwrap().read().await.current_match {
         let matches_guard = matches.read().await;
         let clients_guard = clients.read().await;
@@ -484,8 +521,10 @@ async fn handle_connection(
         matches.write().await.remove(&match_id);
     }
 
-    clients.write().await.remove(&addr);
+    let client = clients.write().await.remove(&addr).unwrap();
+	let username = client.read().await.username.clone();
     observers.write().await.remove(&addr);
+	usernames.write().await.remove(&username);
 
     let mut admin_guard = admin.write().await;
     if let Some(admin_addr) = *admin_guard {
@@ -531,6 +570,22 @@ async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) -> Result
     result.unwrap().write().await.viewers.push(addr);
 
 	Ok(())
+}
+
+async fn get_current_watching_match(matches: &Matches, addr: SocketAddr) -> Option<u32> {
+	let matches_guard = matches.read().await;
+	let mut result = None;
+	for a_match in matches_guard.values() {
+		let a_match = a_match.read().await;
+		for viewer_addr in &a_match.viewers {
+			if *viewer_addr == addr {
+				result = Some(a_match.id);
+				break;
+			}
+		}
+		if result.is_some() { break; }
+	}
+	result
 }
 
 fn send(tx: &UnboundedSender<Message>, text: &str) -> Result<(), SendError<Message>> {
