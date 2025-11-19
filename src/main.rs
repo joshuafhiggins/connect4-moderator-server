@@ -33,7 +33,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
-	let admin_password = env::var("ADMIN_PASSWORD").unwrap_or_else(|_| String::from("admin"));
+	let admin_password = env::var("ADMIN_AUTH").unwrap_or_else(|_| String::from("admin"));
 	info!("Admin password: {}", admin_password);
 	let admin_password = Arc::new(admin_password);
 
