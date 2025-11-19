@@ -240,6 +240,8 @@ async fn handle_connection(
                     )
                     .await;
 
+					// TODO: add to ledger
+
                     // Check game end conditions
                     let (winner, filled) = {
                         let mut result = (Color::None, false);
@@ -394,6 +396,7 @@ async fn handle_connection(
 						Ok(match_id) => {
 							let result = watch(&matches, match_id, addr).await;
 							if result.is_err() { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
+							// TODO: send ledger
 						}
 						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
 					}
@@ -505,32 +508,34 @@ async fn handle_connection(
 
     // Remove and terminate any matches
 	// TODO: Support reconnecting behaviors
-    if let Some(match_id) = clients.read().await.get(&addr).unwrap().read().await.current_match {
-        let matches_guard = matches.read().await;
-        let clients_guard = clients.read().await;
-        let the_match = matches_guard.get(&match_id).unwrap().read().await;
+	if clients.read().await.get(&addr).is_some() { // We may not be a client disconnecting
+		if let Some(match_id) = clients.read().await.get(&addr).unwrap().read().await.current_match {
+			let matches_guard = matches.read().await;
+			let clients_guard = clients.read().await;
+			let the_match = matches_guard.get(&match_id).unwrap().read().await;
 
-        let player1 = clients_guard.get(&the_match.player1).unwrap().read().await;
-        let player2 = clients_guard.get(&the_match.player2).unwrap().read().await;
+			let player1 = clients_guard.get(&the_match.player1).unwrap().read().await;
+			let player2 = clients_guard.get(&the_match.player2).unwrap().read().await;
 
-        let _ = send(&player1.connection, "GAME:TERMINATED");
-        let _ = send(&player2.connection, "GAME:TERMINATED");
+			let _ = send(&player1.connection, "GAME:TERMINATED");
+			let _ = send(&player2.connection, "GAME:TERMINATED");
 
-        broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
+			broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
 
-        drop(player1);
-        drop(player2);
-        drop(the_match);
-        drop(matches_guard);
-        drop(clients_guard);
+			drop(player1);
+			drop(player2);
+			drop(the_match);
+			drop(matches_guard);
+			drop(clients_guard);
 
-        matches.write().await.remove(&match_id);
-    }
-
-    let client = clients.write().await.remove(&addr).unwrap();
-	let username = client.read().await.username.clone();
-    observers.write().await.remove(&addr);
-	usernames.write().await.remove(&username);
+			matches.write().await.remove(&match_id);
+		}
+		let client = clients.write().await.remove(&addr).unwrap();
+		let username = client.read().await.username.clone();
+		usernames.write().await.remove(&username);
+	} else {
+		observers.write().await.remove(&addr);
+	}
 
     let mut admin_guard = admin.write().await;
     if let Some(admin_addr) = *admin_guard {
