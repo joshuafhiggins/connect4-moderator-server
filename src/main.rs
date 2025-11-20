@@ -516,10 +516,7 @@ async fn handle_connection(
                 }
 
 				// TODO: Start tournaments
-
-				else if text == "PING" {
-					let _ = send(&tx, "PONG");
-				}
+					
 				else {
                     let _ = send(&tx, "ERROR:UNKNOWN");
                 }
