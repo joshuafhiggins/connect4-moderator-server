@@ -16,8 +16,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 use types::Client;
 
@@ -170,8 +170,7 @@ async fn handle_connection(
                     let client_option = clients_guard.get(&addr);
 
                     // Check if client is valid
-                    if client_option.is_none()
-                        || client_option.unwrap().read().await.current_match.is_none()
+                    if client_option.is_none() || client_option.unwrap().read().await.current_match.is_none()
                     {
                         let _ = send(&tx, "ERROR:INVALID:MOVE");
                         continue;
@@ -194,9 +193,8 @@ async fn handle_connection(
                     };
 
                     // Check if it's their move
-                    if (current_match.ledger.is_empty() && current_match.first != addr)
-                        || (current_match.ledger.last().is_some()
-                            && current_match.ledger.last().unwrap().0 == client.color)
+                    if (current_match.ledger.is_empty() && current_match.first != addr) ||
+						(current_match.ledger.last().is_some() && current_match.ledger.last().unwrap().0 == client.color)
                     {
                         let _ = send(&tx, "ERROR:INVALID:MOVE");
                         continue;
@@ -215,23 +213,56 @@ async fn handle_connection(
                         .await;
 
                     // Check if valid move
+					let mut invalid = false;
                     if let Ok(column) = column_parse {
-                        if column >= 6 {
+                        if column >= 7 {
                             let _ = send(&tx, "ERROR:INVALID:MOVE");
-                            continue;
+							invalid = true;
                         }
 
-                        if current_match.board[column][4] != Color::None {
+                        if current_match.board[column][5] != Color::None && !invalid {
                             let _ = send(&tx, "ERROR:INVALID:MOVE");
-                            continue;
+							invalid = true;
                         }
 
-                        // Place it
-                        current_match.place_token(client.color.clone(), column)
+
                     } else {
                         let _ = send(&tx, "ERROR:INVALID:MOVE");
-                        continue;
+						invalid = true;
                     }
+
+					// Terminate games if a player makes an invalid move
+					if invalid {
+						let opponent_addr = opponent.addr;
+						let current_match_id = current_match.id;
+
+						broadcast_message(&current_match.viewers, &observers, "GAME:TERMINATED").await;
+
+						drop(client);
+						drop(opponent);
+						drop(current_match);
+						drop(clients_guard);
+
+						let mut clients_guard = clients.write().await;
+						let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
+						client.current_match = None;
+						let _ = send(&tx, "GAME:TERMINATED");
+						drop(client);
+
+						let mut opponent =
+							clients_guard.get_mut(&opponent_addr).unwrap().write().await;
+
+						if !demo_mode {
+							opponent.current_match = None;
+							let _ = send(&opponent.connection, "GAME:TERMINATED");
+						}
+						matches_guard.remove(&current_match_id).unwrap();
+
+						continue;
+					} else {
+						// Place it
+						current_match.place_token(client.color.clone(), column_parse.clone()?);
+					}
 
                     // broadcast the move to viewers
                     broadcast_message(
@@ -248,8 +279,8 @@ async fn handle_connection(
                         let mut result = (Color::None, false);
 
                         let mut any_empty = true;
-                        for x in 0..6 {
-                            for y in 0..5 {
+                        for x in 0..7 {
+                            for y in 0..6 {
                                 let color = current_match.board[x][y].clone();
                                 let mut horizontal_end = true;
                                 let mut vertical_end = true;
@@ -260,20 +291,20 @@ async fn handle_connection(
                                 }
 
                                 for i in 0..4 {
-                                    if x + i >= 6
+                                    if x + i >= 7
                                         || current_match.board[x + i][y] != color && horizontal_end
                                     {
                                         horizontal_end = false;
                                     }
 
-                                    if y + i >= 5
+                                    if y + i >= 6
                                         || current_match.board[x][y + i] != color && vertical_end
                                     {
                                         vertical_end = false;
                                     }
 
-                                    if x + i >= 6
-                                        || y + i >= 5
+                                    if x + i >= 7
+                                        || y + i >= 6
                                         || current_match.board[x + i][y + i] != color
                                             && diagonal_end
                                     {

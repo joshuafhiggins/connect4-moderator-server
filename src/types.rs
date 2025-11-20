@@ -61,7 +61,7 @@ impl Match {
 		// TODO: make player1 in Match always first
         Match {
             id,
-            board: vec![vec![Color::None; 5]; 6],
+            board: vec![vec![Color::None; 6]; 7],
             viewers: Vec::new(),
             ledger: Vec::new(),
             first,
@@ -71,7 +71,7 @@ impl Match {
     }
 
     pub fn place_token(&mut self, color: Color, column: usize) {
-        for i in 0..5 {
+        for i in 0..6 {
             if self.board[column][i] == Color::None {
                 self.board[column][i] = color;
                 break;
