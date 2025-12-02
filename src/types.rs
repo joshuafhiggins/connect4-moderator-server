@@ -1,7 +1,7 @@
 use rand::Rng;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::vec;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -19,7 +19,8 @@ pub struct Client {
     pub ready: bool,
     pub color: Color,
     pub current_match: Option<u32>,
-    pub demo: bool,
+	pub round_robin_id: u32,
+    pub score: u32,
     pub addr: SocketAddr,
 }
 
@@ -31,14 +32,58 @@ impl Client {
             ready: false,
             color: Color::None,
             current_match: None,
-            demo: false,
+			round_robin_id: 0,
+            score: 0,
             addr,
         }
     }
+}
 
-    pub fn send(&self, text: &str) -> Result<(), SendError<Message>> {
-        self.connection.send(Message::text(text))
-    }
+#[derive(Clone)]
+pub struct Tournament {
+	pub players: HashMap<u32, SocketAddr>,
+	pub top_half: Vec<u32>,
+	pub bottom_half: Vec<u32>,
+	pub is_completed: bool,
+}
+
+impl Tournament {
+	pub fn new(ready_players: &[SocketAddr]) -> Tournament {
+		let mut result = Tournament {
+			players: HashMap::new(),
+			top_half: Vec::new(),
+			bottom_half: Vec::new(),
+			is_completed: false,
+		};
+
+		let size = ready_players.len();
+
+		for (id, player) in ready_players.iter().enumerate() {
+			result.players.insert(id as u32, *player);
+		}
+
+		for i in 0..size / 2 {
+			result.top_half.push(i as u32);
+		}
+
+		for i in size / 2..size {
+			result.bottom_half.push(i as u32);
+		}
+
+		result
+	}
+
+	pub fn next(&mut self) {
+		let first = *self.bottom_half.last().unwrap();
+		let last = *self.top_half.last().unwrap();
+
+		self.top_half[0] = first;
+		self.bottom_half[0] = last;
+
+		if self.top_half[0] == 0 {
+			self.is_completed = true;
+		}
+	}
 }
 
 pub struct Match {
@@ -46,7 +91,8 @@ pub struct Match {
     pub board: Vec<Vec<Color>>,
     pub viewers: Vec<SocketAddr>,
     pub ledger: Vec<(Color, usize)>,
-    pub first: SocketAddr,
+	pub move_to_dispatch: (Color, usize),
+	pub wait_thread: Option<tokio::task::JoinHandle<()>>,
     pub player1: SocketAddr,
     pub player2: SocketAddr,
 }
@@ -58,15 +104,16 @@ impl Match {
         } else {
             player2.to_string().parse().unwrap()
         };
-		// TODO: make player1 in Match always first
+
         Match {
             id,
             board: vec![vec![Color::None; 6]; 7],
             viewers: Vec::new(),
             ledger: Vec::new(),
-            first,
-            player1,
-            player2,
+			move_to_dispatch: (Color::None, 0),
+			wait_thread: None,
+            player1: if player1 == first {player1} else {player2},
+            player2: if player1 == first {player2} else {player1},
         }
     }
 

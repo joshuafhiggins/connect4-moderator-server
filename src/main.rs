@@ -2,7 +2,7 @@ mod random_ai;
 mod types;
 
 use crate::random_ai::random_move;
-use crate::types::{Color, Match};
+use crate::types::{Color, Match, Tournament};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use std::collections::HashMap;
@@ -46,6 +46,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
     let admin: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
+	let tournament: Arc<RwLock<Option<Tournament>>> = Arc::new(RwLock::new(None));
+	let waiting_timeout: Arc<RwLock<u64>> = Arc::new(RwLock::new(5));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -57,6 +59,8 @@ async fn main() -> Result<(), anyhow::Error> {
             matches.clone(),
             admin.clone(),
 			admin_password.clone(),
+			tournament.clone(),
+			waiting_timeout.clone(),
             demo_mode,
         ));
     }
@@ -73,6 +77,8 @@ async fn handle_connection(
     matches: Matches,
     admin: Arc<RwLock<Option<SocketAddr>>>,
 	admin_password: Arc<String>,
+	tournament: Arc<RwLock<Option<Tournament>>>,
+	waiting_timeout: Arc<RwLock<u64>>,
     demo_mode: bool,
 ) -> Result<(), anyhow::Error> {
     info!("New WebSocket connection from: {}", addr);
@@ -193,7 +199,7 @@ async fn handle_connection(
                     };
 
                     // Check if it's their move
-                    if (current_match.ledger.is_empty() && current_match.first != addr) ||
+                    if (current_match.ledger.is_empty() && current_match.player1 != addr) ||
 						(current_match.ledger.last().is_some() && current_match.ledger.last().unwrap().0 == client.color)
                     {
                         let _ = send(&tx, "ERROR:INVALID:MOVE");
@@ -262,6 +268,7 @@ async fn handle_connection(
 					} else {
 						// Place it
 						current_match.place_token(client.color.clone(), column_parse.clone()?);
+						current_match.move_to_dispatch = (client.color.clone(), column_parse.clone()?);
 					}
 
                     // broadcast the move to viewers
@@ -271,8 +278,6 @@ async fn handle_connection(
                         &format!("GAME:MOVE:{}:{}", client.username, column_parse.clone()?),
                     )
                     .await;
-
-					// TODO: add to ledger
 
                     // Check game end conditions
                     let (winner, filled) = {
@@ -373,7 +378,11 @@ async fn handle_connection(
 
                         let mut clients_guard = clients.write().await;
                         let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
+						if client.color == winner {
+							client.score += 1;
+						}
                         client.current_match = None;
+						client.color = Color::None;
                         drop(client);
 
                         let mut opponent =
@@ -381,17 +390,111 @@ async fn handle_connection(
 
                         if !demo_mode {
                             opponent.current_match = None;
+							if opponent.color == winner {
+								opponent.score += 1;
+							}
+							opponent.color = Color::None;
                         }
                         matches_guard.remove(&current_match_id).unwrap();
+						drop(opponent);
+
+						if !demo_mode && matches_guard.is_empty() {
+							let mut tournament_guard = tournament.write().await;
+							let tourney = tournament_guard.as_mut().unwrap();
+							tourney.next();
+							if tourney.is_completed {
+								// Send scores
+								let mut player_scores: Vec<(String, u32)> = Vec::new();
+								for (_, player_addr) in tourney.players.iter() {
+									let mut player = clients_guard.get_mut(player_addr).unwrap().write().await;
+									player_scores.push((player.username.clone(), player.score));
+									player.score = 0;
+									player.round_robin_id = 0;
+								}
+
+								player_scores.sort_by(|a, b| b.1.cmp(&a.1));
+
+								let mut message = "TOURNAMENT:END:".to_string();
+								for (player, score) in player_scores.iter() {
+									message.push_str(&format!("{},{}|", player, score))
+								}
+								message.pop();
+
+								broadcast_message_all_observers(&observers, &message).await;
+							} else {
+								// Create next matches
+								for (i, id) in tourney.top_half.iter().enumerate() {
+									let player1_addr = tourney.players.get(id).unwrap();
+									let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap()).unwrap();
+									let match_id: u32 = rand::rng().random_range(100000..=999999);
+									let new_match = Arc::new(RwLock::new(Match::new(
+										match_id,
+										*player1_addr,
+										*player2_addr,
+									)));
+
+									let match_guard = new_match.read().await;
+									let mut player1 = clients_guard.get_mut(player1_addr).unwrap().write().await;
+
+									player1.current_match = Some(match_id);
+									player1.ready = false;
+
+									if match_guard.player1 == *player1_addr {
+										player1.color = Color::Red;
+										let _ = send(&player1.connection, "GAME:START:1");
+									} else {
+										player1.color = Color::Blue;
+										let _ = send(&player1.connection, "GAME:START:0");
+									}
+
+									drop(player1);
+
+									let mut player2 = clients_guard.get_mut(player2_addr).unwrap().write().await;
+
+									player2.current_match = Some(match_id);
+									player2.ready = false;
+
+									if match_guard.player1 == *player2_addr {
+										player2.color = Color::Red;
+										let _ = send(&player2.connection, "GAME:START:1");
+									} else {
+										player2.color = Color::Blue;
+										let _ = send(&player2.connection, "GAME:START:0");
+									}
+
+									drop(player2);
+
+									matches_guard.insert(match_id, new_match.clone());
+								}
+							}
+						}
+
                         continue;
                     }
 
                     if !demo_mode {
-                        // TODO: delay/autoplay/continue behavior
-                        let _ = send(
-                            &opponent.connection,
-                            &format!("OPPONENT:{}", column_parse.clone()?),
-                        );
+						let connection = opponent.connection.clone();
+						let column = column_parse.clone()?;
+						let waiting = *waiting_timeout.read().await * 1000 + (rand::rng().random_range(0..=500) - 250);
+						let matches_move = matches.clone();
+						let match_id_move = current_match.id;
+						current_match.wait_thread = Some(tokio::spawn(async move {
+							tokio::time::sleep(tokio::time::Duration::from_millis(waiting)).await;
+
+							let mut matches_guard = matches_move.write().await;
+							let mut current_match = matches_guard.get_mut(&match_id_move).unwrap().write().await;
+							let move_to_dispatch = current_match.move_to_dispatch.clone();
+							current_match.ledger.push(move_to_dispatch);
+							current_match.move_to_dispatch = (Color::None, 0);
+
+							drop(current_match);
+							drop(matches_guard);
+
+							let _ = send(
+								&connection,
+								&format!("OPPONENT:{}", column),
+							);
+						}));
                     } else {
                         let random_move = random_move(&current_match.board);
                         current_match.place_token(Color::Blue, random_move);
@@ -428,7 +531,22 @@ async fn handle_connection(
 						Ok(match_id) => {
 							let result = watch(&matches, match_id, addr).await;
 							if result.is_err() { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
-							// TODO: send ledger
+
+							let clients_guard = clients.read().await;
+							let matches_guard = matches.read().await;
+							let the_match = matches_guard.get(&match_id).unwrap().read().await;
+							let player1 = clients_guard.get(&the_match.player1).unwrap().read().await.username.clone();
+							let player2 = clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
+
+							drop(clients_guard);
+
+							for a_move in &the_match.ledger {
+								if a_move.0 == Color::Red {
+									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player1, a_move.1));
+								} else {
+									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player2, a_move.1));
+								}
+							}
 						}
 						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
 					}
@@ -473,12 +591,20 @@ async fn handle_connection(
 					}
                 }
 				else if text == "GAME:TERMINATE" {
+					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
 					let match_id_request = get_current_watching_match(&matches, addr).await;
 
 					match match_id_request {
 						Some(match_id) => {
 							let match_guard = matches.read().await;
 							let the_match = match_guard.get(&match_id).unwrap().read().await;
+							if let Some(wait_thread) = &the_match.wait_thread {
+								wait_thread.abort();
+							}
 							let player1_addr = the_match.player1;
 							let player2_addr = the_match.player2;
 							broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
@@ -508,15 +634,81 @@ async fn handle_connection(
 						}
 					}
                 }
-				else if text.starts_with("GAME:AUTOPLAY:") {
-                    todo!()
-                }
-				else if text == "GAME:CONTINUE" {
-                    todo!()
-                }
-
-				// TODO: Start tournaments
 					
+				else if text == "TOURNAMENT:START" {
+					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
+					if tournament.read().await.is_some() || demo_mode {
+						let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
+						continue;
+					}
+
+					let mut clients_guard = clients.write().await;
+					let mut ready_players = Vec::new();
+					for (client_addr, client_guard) in clients_guard.iter_mut() {
+						if client_guard.read().await.ready {
+							ready_players.push(*client_addr);
+						}
+					}
+
+					if ready_players.len() < 3 {
+						let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
+						continue;
+					}
+
+					let tourney = Tournament::new(&ready_players);
+
+					let mut tournament_guard = tournament.write().await;
+					*tournament_guard = Some(tourney.clone());
+
+					for (i, id) in tourney.top_half.iter().enumerate() {
+						let player1_addr = tourney.players.get(id).unwrap();
+						let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap()).unwrap();
+						let match_id: u32 = rand::rng().random_range(100000..=999999);
+						let new_match = Arc::new(RwLock::new(Match::new(
+							match_id,
+							*player1_addr,
+							*player2_addr,
+						)));
+
+						let match_guard = new_match.read().await;
+						let mut player1 = clients_guard.get_mut(player1_addr).unwrap().write().await;
+
+						player1.current_match = Some(match_id);
+						player1.ready = false;
+
+						if match_guard.player1 == *player1_addr {
+							player1.color = Color::Red;
+							let _ = send(&player1.connection, "GAME:START:1");
+						} else {
+							player1.color = Color::Blue;
+							let _ = send(&player1.connection, "GAME:START:0");
+						}
+
+						drop(player1);
+
+						let mut player2 = clients_guard.get_mut(player2_addr).unwrap().write().await;
+
+						player2.current_match = Some(match_id);
+						player2.ready = false;
+
+						if match_guard.player1 == *player2_addr {
+							player2.color = Color::Red;
+							let _ = send(&player2.connection, "GAME:START:1");
+						} else {
+							player2.color = Color::Blue;
+							let _ = send(&player2.connection, "GAME:START:0");
+						}
+
+						drop(player2);
+
+						matches.write().await.insert(match_id, new_match.clone());
+					}
+				}
+
 				else {
                     let _ = send(&tx, "ERROR:UNKNOWN");
                 }
@@ -545,6 +737,9 @@ async fn handle_connection(
 			let matches_guard = matches.read().await;
 			let clients_guard = clients.read().await;
 			let the_match = matches_guard.get(&match_id).unwrap().read().await;
+			if let Some(wait_thread) = &the_match.wait_thread {
+				wait_thread.abort();
+			}
 
 			let player1 = clients_guard.get(&the_match.player1).unwrap().read().await;
 			let player2 = clients_guard.get(&the_match.player2).unwrap().read().await;
@@ -586,6 +781,13 @@ async fn broadcast_message(addrs: &Vec<SocketAddr>, observers: &Observers, msg: 
     for addr in addrs {
         let _ = send(observers.read().await.get(addr).unwrap(), msg);
     }
+}
+
+async fn broadcast_message_all_observers(observers: &Observers, msg: &str) {
+	let observers_guard = observers.read().await;
+	for (_, tx) in observers_guard.iter() {
+		let _ = send(tx, msg);
+	}
 }
 
 async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
