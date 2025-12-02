@@ -74,13 +74,23 @@ impl Tournament {
 	}
 
 	pub fn next(&mut self) {
-		let first = *self.bottom_half.last().unwrap();
-		let last = *self.top_half.last().unwrap();
+		if self.is_completed {
+			return;
+		}
 
-		self.top_half[0] = first;
-		self.bottom_half[0] = last;
+		if self.top_half.len() <= 1 || self.bottom_half.is_empty() {
+			self.is_completed = true;
+			return;
+		}
 
-		if self.top_half[0] == 0 {
+		let last_from_top = self.top_half.pop().unwrap();
+		let first_from_bottom = self.bottom_half.remove(0);
+
+		self.top_half.insert(1, first_from_bottom);
+		self.bottom_half.push(last_from_top);
+
+		let expected_bottom_start = self.top_half.len() as u32;
+		if self.top_half[1] == 1 && self.bottom_half[0] == expected_bottom_start {
 			self.is_completed = true;
 		}
 	}

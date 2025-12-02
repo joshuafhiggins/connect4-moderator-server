@@ -423,9 +423,15 @@ async fn handle_connection(
 								broadcast_message_all_observers(&observers, &message).await;
 							} else {
 								// Create next matches
+								// TODO: Make this a function
 								for (i, id) in tourney.top_half.iter().enumerate() {
 									let player1_addr = tourney.players.get(id).unwrap();
-									let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap()).unwrap();
+									let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap());
+
+									if player2_addr.is_none() { continue; }
+									let player2_addr = player2_addr.unwrap();
+
+									// TODO: gen without collisions
 									let match_id: u32 = rand::rng().random_range(100000..=999999);
 									let new_match = Arc::new(RwLock::new(Match::new(
 										match_id,
@@ -475,11 +481,11 @@ async fn handle_connection(
                     if !demo_mode {
 						let connection = opponent.connection.clone();
 						let column = column_parse.clone()?;
-						let waiting = *waiting_timeout.read().await * 1000 + (rand::rng().random_range(0..=500) - 250);
+						let waiting = *waiting_timeout.read().await as i64 * 1000 + (rand::rng().random_range(0..=500) - 250);
 						let matches_move = matches.clone();
 						let match_id_move = current_match.id;
 						current_match.wait_thread = Some(tokio::spawn(async move {
-							tokio::time::sleep(tokio::time::Duration::from_millis(waiting)).await;
+							tokio::time::sleep(tokio::time::Duration::from_millis(waiting as u64)).await;
 
 							let mut matches_guard = matches_move.write().await;
 							let mut current_match = matches_guard.get_mut(&match_id_move).unwrap().write().await;
@@ -707,6 +713,15 @@ async fn handle_connection(
 
 						matches.write().await.insert(match_id, new_match.clone());
 					}
+				}
+				else if text.starts_with("TOURNAMENT:WAIT:") {
+					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+						continue;
+					}
+
+					let new_timeout = text.split(":").collect::<Vec<&str>>()[2].parse::<f64>()?;
+					*waiting_timeout.write().await = (new_timeout * 1000.0) as u64;
 				}
 
 				else {
