@@ -515,7 +515,7 @@ async fn handle_connection(
 
 				else if text == "PLAYER:LIST" {
 					let clients_guard = clients.read().await;
-					let mut to_send = "GAME:LIST:".to_string();
+					let mut to_send = "PLAYER:LIST:".to_string();
 					for client_guard in clients_guard.values() {
 						let player = client_guard.read().await;
 						to_send += player.username.as_str(); to_send += ",";
