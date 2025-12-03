@@ -561,6 +561,8 @@ async fn handle_connection(
 
 							drop(clients_guard);
 
+							let _ = send(&tx, &format!("GAME:WATCH:ACK:{},{},{}", match_id, player1, player2));
+
 							for a_move in &the_match.ledger {
 								if a_move.0 == Color::Red {
 									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player1, a_move.1));
