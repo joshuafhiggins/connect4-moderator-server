@@ -513,6 +513,21 @@ async fn handle_connection(
                     }
                 }
 
+				else if text == "PLAYER:LIST" {
+					let clients_guard = clients.read().await;
+					let mut to_send = "GAME:LIST:".to_string();
+					for client_guard in clients_guard.values() {
+						let player = client_guard.read().await;
+						to_send += player.username.as_str(); to_send += ",";
+						to_send += if player.ready { "true" } else { "false" }; to_send += ",";
+						to_send += if player.current_match.is_some() { "true" } else { "false" };
+						to_send += "|";
+					}
+
+					to_send.remove(to_send.len() - 1);
+
+					let _ = send(&tx, to_send.as_str());
+				}
 				else if text == "GAME:LIST" {
 					let matches_guard = matches.read().await;
 					let clients_guard = clients.read().await;
@@ -572,6 +587,7 @@ async fn handle_connection(
 
 					let mut admin_guard = admin.write().await;
 					*admin_guard = Some(addr.to_string().parse()?);
+					let _ = send(&tx, "ADMIN:AUTH:ACK");
                 }
 				else if text.starts_with("ADMIN:KICK:") {
 					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
