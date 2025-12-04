@@ -12,6 +12,9 @@ def calculate_move(opponent_move):
     # TODO: Implement your move calculation logic here instead
     return 0
 
+def clear_board():
+  # TODO: Create an empty board
+  return
 
 async def gameloop(socket):
     board = [[None] * 6 for _ in range(7)]
@@ -36,7 +39,7 @@ async def gameloop(socket):
                     | (message[1] == "TERMINATED")
                 ):  # Game has ended
                     print(message[0] + ":" + message[1])
-                    # TODO: Create an empty board
+                    clear_board()
                     await socket.send("READY")
 
             case "OPPONENT":  # Opponent has gone; calculate next move
