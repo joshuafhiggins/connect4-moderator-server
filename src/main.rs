@@ -734,6 +734,8 @@ async fn handle_connection(
 
 						matches.write().await.insert(match_id, new_match.clone());
 					}
+					
+					let _ = send(&tx, "TOURNAMENT:START:ACK");
 				}
 				else if text.starts_with("TOURNAMENT:WAIT:") {
 					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
