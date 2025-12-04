@@ -5,7 +5,7 @@ import websockets
 DEFAULT_SERVER_URL = "wss://connect4.abunchofknowitalls.com"
 
 
-def calculate_move(opponent_move, board):
+def calculate_move(opponent_move):
     if opponent_move is not None:
         print(f"Opponent played column {opponent_move}")
     # TODO: Use the board variable to see and set the current state of the board
@@ -26,7 +26,7 @@ async def gameloop(socket):
                 if message[1] == "START":
                     if message[2] == "1":
                         col = calculate_move(
-                            None, board
+                            None
                         )  # calculate_move is some arbitrary function you have created to figure out the next move
                         await socket.send(f"PLAY:{col}")  # Send your move to the sever
                 if (
@@ -36,12 +36,12 @@ async def gameloop(socket):
                     | (message[1] == "TERMINATED")
                 ):  # Game has ended
                     print(message[0] + ":" + message[1])
-                    board = [[None] * 6 for _ in range(7)]
+                    # TODO: Create an empty board
                     await socket.send("READY")
 
             case "OPPONENT":  # Opponent has gone; calculate next move
                 col = calculate_move(
-                    message[1], board
+                    message[1]
                 )  # Give your function your opponent's move
                 await socket.send(f"PLAY:{col}")  # Send your move to the sever
 
