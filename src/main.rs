@@ -289,9 +289,10 @@ async fn handle_connection(
                                 let color = current_match.board[x][y].clone();
                                 let mut horizontal_end = true;
                                 let mut vertical_end = true;
-                                let mut diagonal_end = true;
+                                let mut diagonal_end_up = true;
+								let mut diagonal_end_down = true;
 
-                                if any_empty && color == Color::None {
+								if any_empty && color == Color::None {
                                     any_empty = false;
                                 }
 
@@ -311,13 +312,21 @@ async fn handle_connection(
                                     if x + i >= 7
                                         || y + i >= 6
                                         || current_match.board[x + i][y + i] != color
-                                            && diagonal_end
+                                            && diagonal_end_up
                                     {
-                                        diagonal_end = false;
+                                        diagonal_end_up = false;
                                     }
+
+									if x + i >= 7
+										|| (y as i32 - i as i32) < 0
+										|| current_match.board[x + i][y - i] != color
+										&& diagonal_end_down
+									{
+										diagonal_end_down = false;
+									}
                                 }
 
-                                if horizontal_end || vertical_end || diagonal_end {
+                                if horizontal_end || vertical_end || diagonal_end_up || diagonal_end_down {
                                     result = (color.clone(), false);
                                     break;
                                 }
