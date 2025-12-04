@@ -558,12 +558,15 @@ async fn handle_connection(
 							let the_match = matches_guard.get(&match_id).unwrap().read().await;
 							let player1 = clients_guard.get(&the_match.player1).unwrap().read().await.username.clone();
 							let player2 = clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
+							let ledger = the_match.ledger.clone();
 
 							drop(clients_guard);
+							drop(the_match);
+							drop(matches_guard);
 
 							let _ = send(&tx, &format!("GAME:WATCH:ACK:{},{},{}", match_id, player1, player2));
 
-							for a_move in &the_match.ledger {
+							for a_move in ledger {
 								if a_move.0 == Color::Red {
 									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player1, a_move.1));
 								} else {
@@ -571,7 +574,7 @@ async fn handle_connection(
 								}
 							}
 						}
-						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
+						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); continue; }
 					}
                 }
 
@@ -824,9 +827,9 @@ async fn broadcast_message_all_observers(observers: &Observers, msg: &str) {
 }
 
 async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
-	let mut matches_guard = matches.write().await;
+	let matches_guard = matches.read().await;
 
-    for a_match in &mut matches_guard.values_mut() {
+    for a_match in matches_guard.values() {
         let mut found = false;
         for i in 0..a_match.write().await.viewers.len() {
             if a_match.write().await.viewers[i] == addr {
