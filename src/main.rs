@@ -551,7 +551,7 @@ async fn handle_connection(
 					match match_id_parse {
 						Ok(match_id) => {
 							let result = watch(&matches, match_id, addr).await;
-							if result.is_err() { let _ = send(&tx, "ERROR:INVALID:WATCH"); }
+							if result.is_err() { let _ = send(&tx, "ERROR:INVALID:WATCH"); continue; }
 
 							let clients_guard = clients.read().await;
 							let matches_guard = matches.read().await;
