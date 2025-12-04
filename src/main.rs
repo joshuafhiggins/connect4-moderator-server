@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::num::ParseIntError;
 use std::process::abort;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
@@ -796,9 +796,9 @@ async fn handle_connection(
 		let client = clients.write().await.remove(&addr).unwrap();
 		let username = client.read().await.username.clone();
 		usernames.write().await.remove(&username);
-	} else {
-		observers.write().await.remove(&addr);
 	}
+
+	observers.write().await.remove(&addr);
 
     let mut admin_guard = admin.write().await;
     if let Some(admin_addr) = *admin_guard {
@@ -815,7 +815,10 @@ async fn handle_connection(
 
 async fn broadcast_message(addrs: &Vec<SocketAddr>, observers: &Observers, msg: &str) {
     for addr in addrs {
-        let _ = send(observers.read().await.get(addr).unwrap(), msg);
+		let observers_guard = observers.read().await;
+		let tx = observers_guard.get(addr);
+		if tx.is_none() { continue; }
+        let _ = send(tx.unwrap(), msg);
     }
 }
 
