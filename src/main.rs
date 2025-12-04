@@ -829,11 +829,12 @@ async fn broadcast_message_all_observers(observers: &Observers, msg: &str) {
 async fn watch(matches: &Matches, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
 	let matches_guard = matches.read().await;
 
-    for a_match in matches_guard.values() {
+    for match_guard in matches_guard.values() {
         let mut found = false;
-        for i in 0..a_match.write().await.viewers.len() {
-            if a_match.write().await.viewers[i] == addr {
-                a_match.write().await.viewers.remove(i);
+		let mut a_match = match_guard.write().await;
+        for i in 0..a_match.viewers.len() {
+            if a_match.viewers[i] == addr {
+                a_match.viewers.remove(i);
                 found = true;
                 break;
             }
