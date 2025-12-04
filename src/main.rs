@@ -487,39 +487,38 @@ async fn handle_connection(
                         continue;
                     }
 
-                    if !demo_mode {
-						let connection = opponent.connection.clone();
-						let column = column_parse.clone()?;
-						let waiting = *waiting_timeout.read().await as i64 * 1000 + (rand::rng().random_range(0..=500) - 250);
-						let matches_move = matches.clone();
-						let match_id_move = current_match.id;
-						current_match.wait_thread = Some(tokio::spawn(async move {
-							tokio::time::sleep(tokio::time::Duration::from_millis(waiting as u64)).await;
+					let connection_to_send = if !demo_mode { opponent.connection.clone() } else { tx.clone() };
+					let column = if !demo_mode { column_parse.clone()? } else { random_move(&current_match.board) };
+					if demo_mode {
+						current_match.place_token(Color::Blue, column);
+					}
 
-							let mut matches_guard = matches_move.write().await;
-							let mut current_match = matches_guard.get_mut(&match_id_move).unwrap().write().await;
-							let move_to_dispatch = current_match.move_to_dispatch.clone();
-							current_match.ledger.push(move_to_dispatch);
-							current_match.move_to_dispatch = (Color::None, 0);
+					let waiting = *waiting_timeout.read().await as i64 * 1000 + (rand::rng().random_range(0..=500) - 250);
+					let matches_move = matches.clone();
+					let observers_move = observers.clone();
+					let match_id_move = current_match.id;
+					current_match.wait_thread = Some(tokio::spawn(async move {
+						tokio::time::sleep(tokio::time::Duration::from_millis(waiting as u64)).await;
 
-							drop(current_match);
-							drop(matches_guard);
+						let mut matches_guard = matches_move.write().await;
+						let mut current_match = matches_guard.get_mut(&match_id_move).unwrap().write().await;
+						let move_to_dispatch = current_match.move_to_dispatch.clone();
+						current_match.ledger.push(move_to_dispatch);
+						current_match.move_to_dispatch = (Color::None, 0);
 
-							let _ = send(
-								&connection,
-								&format!("OPPONENT:{}", column),
-							);
-						}));
-                    } else {
-                        let random_move = random_move(&current_match.board);
-                        current_match.place_token(Color::Blue, random_move);
-                        let _ = send(&tx, &format!("OPPONENT:{}", random_move));
-						broadcast_message(
-							&current_match.viewers,
-							&observers,
-							&format!("GAME:MOVE:{}:{}", "demo", random_move),
-						).await;
-                    }
+						if demo_mode {
+							broadcast_message(
+								&current_match.viewers,
+								&observers_move,
+								&format!("GAME:MOVE:{}:{}", "demo", column),
+							).await;
+						}
+
+						drop(current_match);
+						drop(matches_guard);
+
+						let _ = send(&connection_to_send, &format!("OPPONENT:{}", column));
+					}));
                 }
 
 				else if text == "PLAYER:LIST" {
@@ -573,15 +572,19 @@ async fn handle_connection(
 							drop(the_match);
 							drop(matches_guard);
 
-							let _ = send(&tx, &format!("GAME:WATCH:ACK:{},{},{}", match_id, player1, player2));
+							let mut message = format!("GAME:WATCH:ACK:{},{},{}|", match_id, player1, player2);
 
 							for a_move in ledger {
 								if a_move.0 == Color::Red {
-									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player1, a_move.1));
+									message += &format!("{},{}|", player1, a_move.1);
 								} else {
-									let _ = send(&tx, &format!("GAME:MOVE:{}:{}", player2, a_move.1));
+									message += &format!("{},{}|", player2, a_move.1);
 								}
 							}
+
+							message.pop();
+
+							let _ = send(&tx, &message);
 						}
 						Err(_) => { let _ = send(&tx, "ERROR:INVALID:WATCH"); continue; }
 					}
