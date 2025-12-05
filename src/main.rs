@@ -633,7 +633,7 @@ async fn handle_connection(
 						}
 					}
                 }
-				else if text == "GAME:TERMINATE" {
+				else if text.starts_with("GAME:TERMINATE:") {
 					if admin.read().await.is_none() || admin.read().await.unwrap() != addr {
 						let _ = send(&tx, "ERROR:INVALID:AUTH");
 						continue;
