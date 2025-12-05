@@ -665,11 +665,13 @@ async fn handle_connection(
 					let _ = send(&player1.connection, "GAME:TERMINATED");
 					drop(player1);
 
-					let mut player2 = clients_guard.get(&player2_addr).unwrap().write().await;
-					player2.current_match = None;
-					player2.color = Color::None;
-					let _ = send(&player2.connection, "GAME:TERMINATED");
-					drop(player2);
+					if !demo_mode {
+						let mut player2 = clients_guard.get(&player2_addr).unwrap().write().await;
+						player2.current_match = None;
+						player2.color = Color::None;
+						let _ = send(&player2.connection, "GAME:TERMINATED");
+						drop(player2);
+					}
 
 					drop(clients_guard);
 
