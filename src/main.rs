@@ -47,7 +47,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
     let admin: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
 	let tournament: Arc<RwLock<Option<Tournament>>> = Arc::new(RwLock::new(None));
-	let waiting_timeout: Arc<RwLock<u64>> = Arc::new(RwLock::new(5));
+	let waiting_timeout: Arc<RwLock<u64>> = Arc::new(RwLock::new(5000));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -490,10 +490,13 @@ async fn handle_connection(
 					let connection_to_send = if !demo_mode { opponent.connection.clone() } else { tx.clone() };
 					let column = if !demo_mode { column_parse.clone()? } else { random_move(&current_match.board) };
 					if demo_mode {
+						let move_to_dispatch = current_match.move_to_dispatch.clone();
+						current_match.ledger.push(move_to_dispatch);
+						current_match.move_to_dispatch = (Color::Blue, column);
 						current_match.place_token(Color::Blue, column);
 					}
 
-					let waiting = *waiting_timeout.read().await as i64 * 1000 + (rand::rng().random_range(0..=500) - 250);
+					let waiting = *waiting_timeout.read().await as i64 + (rand::rng().random_range(0..=50) - 25);
 					let matches_move = matches.clone();
 					let observers_move = observers.clone();
 					let match_id_move = current_match.id;
@@ -565,7 +568,8 @@ async fn handle_connection(
 							let matches_guard = matches.read().await;
 							let the_match = matches_guard.get(&match_id).unwrap().read().await;
 							let player1 = clients_guard.get(&the_match.player1).unwrap().read().await.username.clone();
-							let player2 = clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
+							let mut player2 = clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
+							if demo_mode { player2 = "demo".to_string(); }
 							let ledger = the_match.ledger.clone();
 
 							drop(clients_guard);
