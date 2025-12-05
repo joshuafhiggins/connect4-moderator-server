@@ -639,43 +639,41 @@ async fn handle_connection(
 						continue;
 					}
 
-					let match_id_request = get_current_watching_match(&matches, addr).await;
+					let match_id_parse = text.split(":").collect::<Vec<&str>>()[2].parse::<u32>();
+					if match_id_parse.is_err() { let _ = send(&tx, "ERROR:INVALID:TERMINATE"); continue; }
 
-					match match_id_request {
-						Some(match_id) => {
-							let match_guard = matches.read().await;
-							let the_match = match_guard.get(&match_id).unwrap().read().await;
-							if let Some(wait_thread) = &the_match.wait_thread {
-								wait_thread.abort();
-							}
-							let player1_addr = the_match.player1;
-							let player2_addr = the_match.player2;
-							broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
-							drop(the_match);
-							drop(match_guard);
+					let match_guard = matches.read().await;
+					let match_id_request = match_guard.get(&match_id_parse.clone()?).unwrap();
+					let the_match = match_id_request.read().await;
 
-							let clients_guard = clients.write().await;
-
-							let mut player1 = clients_guard.get(&player1_addr).unwrap().write().await;
-							player1.current_match = None;
-							player1.color = Color::None;
-							let _ = send(&player1.connection, "GAME:TERMINATED");
-							drop(player1);
-
-							let mut player2 = clients_guard.get(&player2_addr).unwrap().write().await;
-							player2.current_match = None;
-							player2.color = Color::None;
-							let _ = send(&player2.connection, "GAME:TERMINATED");
-							drop(player2);
-
-							drop(clients_guard);
-
-							matches.write().await.remove(&match_id);
-						},
-						None => {
-							let _ = send(&tx, "ERROR:INVALID:TERMINATE");
-						}
+					if let Some(wait_thread) = &the_match.wait_thread {
+						wait_thread.abort();
 					}
+
+					let player1_addr = the_match.player1;
+					let player2_addr = the_match.player2;
+					broadcast_message(&the_match.viewers, &observers, "GAME:TERMINATED").await;
+
+					drop(the_match);
+					drop(match_guard);
+
+					let clients_guard = clients.write().await;
+
+					let mut player1 = clients_guard.get(&player1_addr).unwrap().write().await;
+					player1.current_match = None;
+					player1.color = Color::None;
+					let _ = send(&player1.connection, "GAME:TERMINATED");
+					drop(player1);
+
+					let mut player2 = clients_guard.get(&player2_addr).unwrap().write().await;
+					player2.current_match = None;
+					player2.color = Color::None;
+					let _ = send(&player2.connection, "GAME:TERMINATED");
+					drop(player2);
+
+					drop(clients_guard);
+
+					matches.write().await.remove(&match_id_parse?);
                 }
 					
 				else if text == "TOURNAMENT:START" {
