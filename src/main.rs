@@ -722,7 +722,9 @@ async fn handle_connection(
 			drop(client);
 		}
 
-		sd.clients.write().await.remove(&addr).unwrap();
+		drop(clients_guard);
+
+		sd.clients.write().await.remove(&addr);
 		sd.usernames.write().await.remove(&username);
 	}
 
