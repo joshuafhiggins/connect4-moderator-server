@@ -2,6 +2,8 @@
 
 A WebSocket server for the RPI Minds & Machines class and the Connect4 Final Project.
 
+Built from the foundation of [exoRift/mindsmachines-connect](https://github.com/exoRift/mindsmachines-connect4)
+
 # To Build Your AI
 Download the [`gameloop.py`](https://github.com/joshuafhiggins/connect4-moderator-server/blob/main/gameloop.py) and [`agent.py`](https://github.com/joshuafhiggins/connect4-moderator-server/blob/main/agent.py) files. It is heavily encouraged you only make changes to the `agent.py` file
 
