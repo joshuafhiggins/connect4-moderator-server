@@ -120,7 +120,8 @@ async fn handle_connection(
                     }
 
                     let mut is_taken = false;
-                    for client in sd.clients.read().await.values() {
+					let clients_guard = sd.clients.read().await;
+                    for client in clients_guard.values() {
                         if requested_username == client.read().await.username {
                             let _ = send(&tx, &format!("ERROR:INVALID:ID:{}", requested_username));
                             is_taken = true;
@@ -131,6 +132,8 @@ async fn handle_connection(
                     if is_taken {
                         continue;
                     }
+
+					drop(clients_guard);
 
                     // not taken
 					sd.observers.write().await.remove(&addr);
@@ -708,12 +711,18 @@ async fn handle_connection(
 
     // Remove and terminate any matches
 	// We may not be a client disconnecting, do this check
-	if sd.clients.read().await.get(&addr).is_some() {
-		if let Some(match_id) = sd.clients.read().await.get(&addr).unwrap().read().await.current_match {
+	let clients_guard = sd.clients.read().await;
+	if clients_guard.get(&addr).is_some() {
+		let client = clients_guard.get(&addr).unwrap().read().await;
+		let username = client.username.clone();
+		if let Some(match_id) = client.current_match {
+			drop(client);
 			terminate_match(match_id, &sd.matches, &sd.clients, &sd.observers, sd.demo_mode).await;
+		} else {
+			drop(client);
 		}
-		let client = sd.clients.write().await.remove(&addr).unwrap();
-		let username = client.read().await.username.clone();
+
+		sd.clients.write().await.remove(&addr).unwrap();
 		sd.usernames.write().await.remove(&username);
 	}
 
