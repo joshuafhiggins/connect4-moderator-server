@@ -259,6 +259,12 @@ async fn handle_connection(
 					// Terminate games if a player makes an invalid move
 					if invalid {
 						let current_match_id = current_match.id;
+						let viewers = current_match.viewers.clone();
+
+						drop(current_match);
+						drop(matches_guard);
+						drop(client);
+						drop(clients_guard);
 
 						if sd.demo_mode {
 							terminate_match(current_match_id, &sd.matches, &sd.clients, &sd.observers, sd.demo_mode).await;
@@ -266,11 +272,7 @@ async fn handle_connection(
 						} else {
 							let _ = send(&tx, "GAME:LOSS");
 							let _ = send(&opponent_connection, "GAME:WINS");
-							broadcast_message(&current_match.viewers, &sd.observers, &format!("GAME:WIN:{}", opponent_username)).await;
-
-							drop(client);
-							drop(current_match);
-							drop(clients_guard);
+							broadcast_message(&viewers, &sd.observers, &format!("GAME:WIN:{}", opponent_username)).await;
 
 							let mut clients_guard = sd.clients.write().await;
 							let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
@@ -284,7 +286,7 @@ async fn handle_connection(
 							opponent.score += 1;
 							drop(opponent);
 
-							matches_guard.remove(&current_match_id).unwrap();
+							sd.matches.write().await.remove(&current_match_id).unwrap();
 						}
 						continue;
 					} else {
