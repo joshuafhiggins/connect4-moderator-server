@@ -1,6 +1,6 @@
 mod types;
 
-use crate::types::{Color, Match, Tournament};
+use crate::types::{*};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use std::collections::HashMap;
@@ -13,26 +13,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
-use types::Client;
 
-type Clients = Arc<RwLock<HashMap<SocketAddr, Arc<RwLock<Client>>>>>;
-type Usernames = Arc<RwLock<HashMap<String, SocketAddr>>>;
-type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
-type Matches = Arc<RwLock<HashMap<u32, Arc<RwLock<Match>>>>>;
-
-// TODO: allow random player1 in demo mode
-
-struct Server {
-	clients: Clients,
-	usernames: Usernames,
-	observers: Observers,
-	matches: Matches,
-	admin: Arc<RwLock<Option<SocketAddr>>>,
-	admin_password: Arc<String>,
-	tournament: Arc<RwLock<Option<Tournament>>>,
-	waiting_timeout: Arc<RwLock<u64>>,
-	demo_mode: bool,
-}
+// TODO: Allow random "player1" in demo mode
+// TODO: Support reconnecting behaviors
+// TODO: Other tournament types
+// TODO: Move timeouts
+// TODO: Send moves instantly, sleep only till waiting time
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -41,6 +27,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
+	let tournament_type = if !demo_mode {
+		if let Some(tourney) = args.get(1) {
+			tourney.clone()
+		} else {
+			"round_robin".to_string()
+		}
+	} else { "round_robin".to_string() };
 	let admin_password = env::var("ADMIN_AUTH").unwrap_or_else(|_| String::from("admin"));
 	info!("Admin password: {}", admin_password);
 	let admin_password = Arc::new(admin_password);
@@ -54,7 +47,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let matches: Matches = Arc::new(RwLock::new(HashMap::new()));
     let admin: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
-	let tournament: Arc<RwLock<Option<Tournament>>> = Arc::new(RwLock::new(None));
+	let tournament: WrappedTournament = Arc::new(RwLock::new(None));
 	let waiting_timeout: Arc<RwLock<u64>> = Arc::new(RwLock::new(5000));
 
 	let server_data = Arc::new(
@@ -67,7 +60,8 @@ async fn main() -> Result<(), anyhow::Error> {
 			admin_password,
 			tournament,
 			waiting_timeout,
-			demo_mode
+			demo_mode,
+			tournament_type,
 		}
 	);
 
@@ -197,9 +191,9 @@ async fn handle_connection(
 
 					let opponent_addr =
 					if addr == current_match.player1 {
-						current_match.player1
-					} else {
 						current_match.player2
+					} else {
+						current_match.player1
 					};
 
 					let opponent_connection =
@@ -218,11 +212,12 @@ async fn handle_connection(
 
 
                     // Check if it's their move
+					let mut invalid = false;
                     if (current_match.ledger.is_empty() && current_match.player1 != addr) ||
 						(current_match.ledger.last().is_some() && current_match.ledger.last().unwrap().0 == client.color)
                     {
                         let _ = send(&tx, "ERROR:INVALID:MOVE");
-                        continue;
+						invalid = true;
                     }
 
                     let column_parse = text.split(":").collect::<Vec<&str>>()[1].parse::<usize>();
@@ -238,9 +233,8 @@ async fn handle_connection(
                         .await;
 
                     // Check if valid move
-					let mut invalid = false;
                     if let Ok(column) = column_parse {
-                        if column >= 7 {
+                        if column >= 7 && !invalid {
                             let _ = send(&tx, "ERROR:INVALID:MOVE");
 							invalid = true;
                         }
@@ -346,8 +340,8 @@ async fn handle_connection(
                         drop(current_match);
                         drop(clients_guard);
 
-                        let mut clients_guard = sd.clients.write().await;
-                        let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
+                        let  clients_guard = sd.clients.read().await;
+                        let mut client = clients_guard.get(&addr).unwrap().write().await;
 						if client.color == winner {
 							client.score += 1;
 						}
@@ -355,92 +349,24 @@ async fn handle_connection(
 						client.color = Color::None;
                         drop(client);
 
-                        let mut opponent =
-                            clients_guard.get_mut(&opponent_addr).unwrap().write().await;
-
-                        if !sd.demo_mode {
-                            opponent.current_match = None;
-							if opponent.color == winner {
-								opponent.score += 1;
-							}
-							opponent.color = Color::None;
-                        }
-                        matches_guard.remove(&current_match_id).unwrap();
+                        let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
+						if opponent.color == winner {
+							opponent.score += 1;
+						}
+						opponent.current_match = None;
+						opponent.color = Color::None;
 						drop(opponent);
+                        matches_guard.remove(&current_match_id).unwrap();
 
 						if !sd.demo_mode && matches_guard.is_empty() {
+							drop(matches_guard);
+							drop(clients_guard);
+
 							let mut tournament_guard = sd.tournament.write().await;
 							let tourney = tournament_guard.as_mut().unwrap();
-							tourney.next();
-							if tourney.is_completed {
-								// Send scores
-								let mut player_scores: Vec<(String, u32)> = Vec::new();
-								for (_, player_addr) in tourney.players.iter() {
-									let mut player = clients_guard.get_mut(player_addr).unwrap().write().await;
-									player_scores.push((player.username.clone(), player.score));
-									player.score = 0;
-									player.round_robin_id = 0;
-								}
-
-								player_scores.sort_by(|a, b| b.1.cmp(&a.1));
-
-								let mut message = "TOURNAMENT:END:".to_string();
-								for (player, score) in player_scores.iter() {
-									message.push_str(&format!("{},{}|", player, score))
-								}
-								message.pop();
-
-								broadcast_message_all_observers(&sd.observers, &message).await;
-							} else {
-								// Create next matches
-								// TODO: Make this a function
-								for (i, id) in tourney.top_half.iter().enumerate() {
-									let player1_addr = tourney.players.get(id).unwrap();
-									let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap());
-
-									if player2_addr.is_none() { continue; }
-									let player2_addr = player2_addr.unwrap();
-
-									let match_id: u32 = gen_match_id(&sd.matches).await;
-									let new_match = Arc::new(RwLock::new(Match::new(
-										match_id,
-										*player1_addr,
-										*player2_addr,
-									)));
-
-									let match_guard = new_match.read().await;
-									let mut player1 = clients_guard.get_mut(player1_addr).unwrap().write().await;
-
-									player1.current_match = Some(match_id);
-									player1.ready = false;
-
-									if match_guard.player1 == *player1_addr {
-										player1.color = Color::Red;
-										let _ = send(&player1.connection, "GAME:START:1");
-									} else {
-										player1.color = Color::Blue;
-										let _ = send(&player1.connection, "GAME:START:0");
-									}
-
-									drop(player1);
-
-									let mut player2 = clients_guard.get_mut(player2_addr).unwrap().write().await;
-
-									player2.current_match = Some(match_id);
-									player2.ready = false;
-
-									if match_guard.player1 == *player2_addr {
-										player2.color = Color::Red;
-										let _ = send(&player2.connection, "GAME:START:1");
-									} else {
-										player2.color = Color::Blue;
-										let _ = send(&player2.connection, "GAME:START:0");
-									}
-
-									drop(player2);
-
-									matches_guard.insert(match_id, new_match.clone());
-								}
+							tourney.write().await.next(&sd.clients, &sd.matches, &sd.observers).await;
+							if tourney.read().await.is_completed() {
+								*tournament_guard = None;
 							}
 						}
 
@@ -452,8 +378,8 @@ async fn handle_connection(
 					if sd.demo_mode {
 						let move_to_dispatch = current_match.move_to_dispatch.clone();
 						current_match.ledger.push(move_to_dispatch);
-						current_match.move_to_dispatch = (Color::Blue, column);
-						current_match.place_token(Color::Blue, column);
+						current_match.move_to_dispatch = (Color::Yellow, column);
+						current_match.place_token(Color::Yellow, column);
 					}
 
 					let waiting = *sd.waiting_timeout.read().await as i64 + (rand::rng().random_range(0..=50) - 25);
@@ -602,6 +528,15 @@ async fn handle_connection(
 					if match_id_parse.is_err() { let _ = send(&tx, "ERROR:INVALID:TERMINATE"); continue; }
 
 					terminate_match(match_id_parse?, &sd.matches, &sd.clients, &sd.observers, sd.demo_mode).await;
+
+					if !sd.demo_mode && sd.matches.read().await.is_empty() {
+						let mut tournament_guard = sd.tournament.write().await;
+						let tourney = tournament_guard.as_mut().unwrap();
+						tourney.write().await.next(&sd.clients, &sd.matches, &sd.observers).await;
+						if tourney.read().await.is_completed() {
+							*tournament_guard = None;
+						}
+					}
                 }
 
 				else if text == "TOURNAMENT:START" {
@@ -627,58 +562,36 @@ async fn handle_connection(
 						continue;
 					}
 
-					let tourney = Tournament::new(&ready_players);
+					drop(clients_guard);
+
+					let mut tourney = match sd.tournament_type.as_str() {
+						"round_robin" => RoundRobin::new(&ready_players),
+						&_ => RoundRobin::new(&ready_players),
+					};
+					tourney.start(&sd.clients, &sd.matches).await;
 
 					let mut tournament_guard = sd.tournament.write().await;
-					*tournament_guard = Some(tourney.clone());
-
-					for (i, id) in tourney.top_half.iter().enumerate() {
-						let player1_addr = tourney.players.get(id).unwrap();
-						let player2_addr = tourney.players.get(tourney.bottom_half.get(i).unwrap()).unwrap();
-						let match_id: u32 = gen_match_id(&sd.matches).await;
-						let new_match = Arc::new(RwLock::new(Match::new(
-							match_id,
-							*player1_addr,
-							*player2_addr,
-						)));
-
-						let match_guard = new_match.read().await;
-						let mut player1 = clients_guard.get_mut(player1_addr).unwrap().write().await;
-
-						player1.current_match = Some(match_id);
-						player1.ready = false;
-
-						if match_guard.player1 == *player1_addr {
-							player1.color = Color::Red;
-							let _ = send(&player1.connection, "GAME:START:1");
-						} else {
-							player1.color = Color::Blue;
-							let _ = send(&player1.connection, "GAME:START:0");
-						}
-
-						drop(player1);
-
-						let mut player2 = clients_guard.get_mut(player2_addr).unwrap().write().await;
-
-						player2.current_match = Some(match_id);
-						player2.ready = false;
-
-						if match_guard.player1 == *player2_addr {
-							player2.color = Color::Red;
-							let _ = send(&player2.connection, "GAME:START:1");
-						} else {
-							player2.color = Color::Blue;
-							let _ = send(&player2.connection, "GAME:START:0");
-						}
-
-						drop(player2);
-
-						sd.matches.write().await.insert(match_id, new_match.clone());
-					}
+					*tournament_guard = Some(Arc::new(RwLock::new(tourney)));
 
 					let _ = send(&tx, "TOURNAMENT:START:ACK");
 				}
-				// TODO: Cancel Tournament
+				else if text == "TOURNAMENT:CANCEL" {
+					if !auth_check(&sd.admin, addr).await {
+						let _ = send(&tx, "ERROR:INVALID:AUTH");
+					}
+
+					if sd.tournament.read().await.is_none() || sd.demo_mode {
+						let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
+						continue;
+					}
+
+					let mut tournament_guard = sd.tournament.write().await;
+					let tourney = tournament_guard.as_mut().unwrap();
+					tourney.write().await.cancel(&sd.clients, &sd.matches, &sd.observers).await;
+					*tournament_guard = None;
+
+					let _ = send(&tx, "TOURNAMENT:CANCEL:ACK");
+				}
 				else if text.starts_with("TOURNAMENT:WAIT:") {
 					if !auth_check(&sd.admin, addr).await {
 						let _ = send(&tx, "ERROR:INVALID:AUTH");
@@ -686,6 +599,23 @@ async fn handle_connection(
 
 					let new_timeout = text.split(":").collect::<Vec<&str>>()[2].parse::<f64>()?;
 					*sd.waiting_timeout.write().await = (new_timeout * 1000.0) as u64;
+				}
+
+				else if text == "GET:MOVE_WAIT" {
+					let mut msg = "GET:MOVE_WAIT:".to_string();
+					msg += &(*sd.waiting_timeout.read().await as f64 / 1000f64).to_string();
+					let _ = send(&tx, &msg);
+				}
+
+				else if text == "GET:TOURNAMENT_STATUS" {
+					let status = sd.tournament.read().await.is_some();
+					if sd.demo_mode {
+						let _ = send(&tx, "GET:TOURNAMENT_STATUS:DEMO");
+					} else {
+						let mut msg = "GET:TOURNAMENT_STATUS:".to_string();
+						msg += status.to_string().as_str();
+						let _ = send(&tx, &msg);
+					}
 				}
 
 				else {
@@ -708,8 +638,6 @@ async fn handle_connection(
 
     // Clean up
     send_task.abort();
-
-	// TODO: Support reconnecting behaviors
 
     // Remove and terminate any matches
 	// We may not be a client disconnecting, do this check

@@ -24,12 +24,15 @@ async def gameloop(socket):
         if (message[1] == "WINS") | (message[1] == "LOSS") | (message[1] == "DRAW") | (message[1] == "TERMINATED"):
           print(message[0] + ":" + message[1])
           player.reset()
-          await socket.send("READY")
 
       case "OPPONENT":
         # Opponent has gone; calculate next move
         col = player.calculate_move(message[1])
         await socket.send(f"PLAY:{col}")  # Send your move to the sever
+        
+      case "TOURNAMENT":
+        if message[1] == "END":
+          await socket.send("READY")
 
       case "ERROR":
         print(f"{message[0]}: {':'.join(message[1:])}")
