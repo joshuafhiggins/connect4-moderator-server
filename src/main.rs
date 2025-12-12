@@ -17,7 +17,9 @@ use tracing::{error, info, warn};
 // TODO: Allow random "player1" in demo mode
 // TODO: Support reconnecting behaviors
 // TODO: Other tournament types
-// TODO: Move timeouts
+// TODO: Max move wait time
+// TODO: Show tournament scoreboard after every round of games
+// TODO: Tiebreakers, guarantee some amount of going first
 // TODO: Send moves instantly, sleep only till waiting time
 
 #[tokio::main]
@@ -626,9 +628,8 @@ async fn handle_connection(
                 info!("Client {} disconnected", addr);
                 break;
             }
-            Ok(Message::Ping(b)) => { let _ = tx.send(Message::Pong(b)); }
             Ok(Message::Binary(_)) => { let _ = send(&tx, "ERROR:UNKNOWN"); }
-			Ok(_) => { info!("Received pong/frame? Something fishy is happening") },
+			Ok(_) => {}, // Ping packets, we can ignore, they get handled for us
             Err(e) => {
                 error!("WebSocket error for {}: {}", addr, e);
                 break;

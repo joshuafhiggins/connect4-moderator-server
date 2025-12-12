@@ -12,7 +12,7 @@ In order to run your AI, you'll need:
 - `pip install websockets` (Windows) or `pip3 install websockets` (Linux/macOS)
 - `pip install pip-system-certs` (Windows) or `pip3 install pip-system-certs` (Linux/macOS)
 
-To run the example, run `python gameloop.py`.
+To run the example, run `python gameloop.py` (Windows) or `python3 gameloop.py` (Linux/macOS).
 
 # To Watch Games
 The visual client for observing games/tournaments as well as managing games can be found at [`connect4-moderator-observer`](https://github.com/joshuafhiggins/connect4-moderator-observer).
@@ -23,15 +23,15 @@ The visual client for observing games/tournaments as well as managing games can 
 - `cd connect4-moderator-server`
 - `cargo run --release demo`
 
-In this mode, you'll play against a player named `demo` who makes moves at random. If your AI makes invalid moves then your match is terminated and kicked from the server. If during the tournament you make an invalid move, you will instead immediately lose your game.
+In this mode, you'll play against a player named `demo` who makes moves at random. If your AI makes invalid moves then your match is terminated and you are kicked from the server. If during the tournament you make an invalid move, you will instead immediately lose your game.
 
 To connect to this server, use the address `ws://localhost:8080`
 
 # For Future Maintainers:
-The Google Sheet outlining the communication protocol can be found [here](https://docs.google.com/spreadsheets/d/1qPrNvB4-1jzvkaQXJcA1Z2OllpSQYmtMRfbOgSi4Yhw), for those of you who'd prefer to not write their AI in python
+The Google Sheet outlining the communication protocol can be found [here](https://docs.google.com/spreadsheets/d/1qPrNvB4-1jzvkaQXJcA1Z2OllpSQYmtMRfbOgSi4Yhw).
 
-A JavaScript debug client that text raw text as input and prints responses is provided,
+A JavaScript debug client that takes raw text as input and prints responses is provided,
 - `npm i`
 - `node debug_client.js`
 
-I also apologize in advance.
+I also apologize in advance for the code you'll go on to read.
