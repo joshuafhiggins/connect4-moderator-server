@@ -32,7 +32,7 @@
 					"displayName": "File Browser",
 					"url": "http://localhost:${localEnv:FEATURE_FILEBROWSER_OPTION_PORT:13339}",
 					"icon": "/icon/filebrowser.svg",
-					"order": 3,
+					"order": 6,
 					"subdomain": true,
 					"healthcheck": {
 						"url": "http://localhost:${localEnv:FEATURE_FILEBROWSER_OPTION_PORT:13339}/health",

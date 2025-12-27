@@ -38,15 +38,15 @@
 					"url": "cursor://coder.coder-remote/openDevContainer?owner=${localEnv:CODER_WORKSPACE_OWNER_NAME}&workspace=${localEnv:CODER_WORKSPACE_NAME}&agent=${localEnv:CODER_WORKSPACE_PARENT_AGENT_NAME}&url=${localEnv:CODER_URL}&token=$SESSION_TOKEN&devContainerName=${localEnv:CONTAINER_ID}&devContainerFolder=${containerWorkspaceFolder}&localWorkspaceFolder=${localWorkspaceFolder}",
 					"external": true,
 					"icon": "/icon/cursor.svg",
-					"order": 1
+					"order": 5
 				},
 				{
 					"slug": "rustrover",
 					"displayName": "RustRover",
 					"url": "jetbrains://gateway?type=ssh&product=RustRover&host=${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder&port=22&username=${localEnv:CODER_WORKSPACE_USERNAME:coder}&projectPath=${containerWorkspaceFolder}",
 					"external": true,
-					"icon": "https://resources.jetbrains.com/storage/products/rustrover/img/meta/rustrover_logo.svg",
-					"order": 2
+					"icon": "/icon/rustrover.svg",
+					"order": 4
 				},
 				{
 					"slug": "zed",
@@ -54,7 +54,7 @@
 					"url": "zed://ssh/${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder${containerWorkspaceFolder}",
 					"external": true,
 					"icon": "/icon/zed.svg",
-					"order": 5
+					"order": 3
 				},
 				// Reproduce `code-server` app here from the code-server
 				// feature so that we can set the correct folder and order.
@@ -64,12 +64,12 @@
 				// is not yet set in the feature.
 				{
 					"slug": "code-server",
-					"displayName": "code-server",
+					"displayName": "VS Code Web",
 					"url": "http://${localEnv:FEATURE_CODE_SERVER_OPTION_HOST:127.0.0.1}:${localEnv:FEATURE_CODE_SERVER_OPTION_PORT:8080}/?folder=${containerWorkspaceFolder}",
 					"openIn": "${localEnv:FEATURE_CODE_SERVER_OPTION_APPOPENIN:slim-window}",
 					"share": "${localEnv:FEATURE_CODE_SERVER_OPTION_APPSHARE:owner}",
 					"icon": "/icon/code.svg",
-					"order": 3,
+					"order": 2,
 					"healthCheck": {
 						"url": "http://${localEnv:FEATURE_CODE_SERVER_OPTION_HOST:127.0.0.1}:${localEnv:FEATURE_CODE_SERVER_OPTION_PORT:8080}/healthz",
 						"interval": 5,
