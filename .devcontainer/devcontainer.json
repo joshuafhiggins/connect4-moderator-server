@@ -43,7 +43,7 @@
 				{
 					"slug": "rustrover",
 					"displayName": "RustRover",
-					"url": "jetbrains://gateway?type=ssh&product=RustRover&host=${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder&port=22&username=${localEnv:CODER_WORKSPACE_USERNAME:coder}&projectPath=${containerWorkspaceFolder}",
+					"url": "rustrover://connect#host=${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder&port=22&user=${localEnv:CODER_WORKSPACE_USERNAME:coder}&type=ssh&projectPath=${containerWorkspaceFolder}",
 					"external": true,
 					"icon": "/icon/rustrover.svg",
 					"order": 4
