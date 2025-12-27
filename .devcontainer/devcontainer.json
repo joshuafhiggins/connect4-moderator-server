@@ -41,14 +41,6 @@
 					"order": 5
 				},
 				{
-					"slug": "rustrover",
-					"displayName": "RustRover",
-					"url": "rustrover://connect#host=${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder&port=22&user=${localEnv:CODER_WORKSPACE_USERNAME:coder}&type=ssh&projectPath=${containerWorkspaceFolder}",
-					"external": true,
-					"icon": "/icon/rustrover.svg",
-					"order": 4
-				},
-				{
 					"slug": "zed",
 					"displayName": "Zed Editor",
 					"url": "zed://ssh/${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder${containerWorkspaceFolder}",
