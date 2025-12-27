@@ -1,13 +1,19 @@
 {
 	"name": "Development environments on your infrastructure",
-	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
+	"image": "codercom/enterprise-rust:latest",
 	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {
-			"moby": "false"
-		},
+		"ghcr.io/devcontainers/features/node:1": {
+        	"version": "latest"
+    	},
+		"ghcr.io/devcontainers/features/python:1": {
+        	"version": "latest"
+    	},
 		"ghcr.io/coder/devcontainer-features/code-server:1": {
 			"auth": "none",
 			"port": 13337
+		},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"moby": "false"
 		},
 		"./filebrowser": {
 			"folder": "${containerWorkspaceFolder}"
@@ -33,6 +39,14 @@
 					"external": true,
 					"icon": "/icon/cursor.svg",
 					"order": 1
+				},
+				{
+					"slug": "rustrover",
+					"displayName": "RustRover",
+					"url": "jetbrains://gateway?type=ssh&product=RustRover&host=${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder&port=22&username=${localEnv:CODER_WORKSPACE_USERNAME:coder}&projectPath=${containerWorkspaceFolder}",
+					"external": true,
+					"icon": "https://resources.jetbrains.com/storage/products/rustrover/img/meta/rustrover_logo.svg",
+					"order": 2
 				},
 				{
 					"slug": "zed",
