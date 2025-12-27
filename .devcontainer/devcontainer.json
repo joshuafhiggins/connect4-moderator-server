@@ -14,9 +14,6 @@
 		},
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {
 			"moby": "false"
-		},
-		"./filebrowser": {
-			"folder": "${containerWorkspaceFolder}"
 		}
 	},
 	// SYS_PTRACE to enable go debugging
