@@ -2,6 +2,8 @@
 
 install_devcontainer_cli() {
 	set -e
+	curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+	nvm install 24
 	echo "🔧 Installing DevContainer CLI..."
 	cd "$(dirname "$0")/../tools/devcontainer-cli"
 	npm ci --omit=dev
