@@ -1,6 +1,6 @@
 {
 	"name": "Development environments on your infrastructure",
-	"image": "codercom/oss-dogfood:latest",
+	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
 	"features": {
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {
 			"moby": "false"
@@ -35,14 +35,6 @@
 					"order": 1
 				},
 				{
-					"slug": "windsurf",
-					"displayName": "Windsurf Editor",
-					"url": "windsurf://coder.coder-remote/openDevContainer?owner=${localEnv:CODER_WORKSPACE_OWNER_NAME}&workspace=${localEnv:CODER_WORKSPACE_NAME}&agent=${localEnv:CODER_WORKSPACE_PARENT_AGENT_NAME}&url=${localEnv:CODER_URL}&token=$SESSION_TOKEN&devContainerName=${localEnv:CONTAINER_ID}&devContainerFolder=${containerWorkspaceFolder}&localWorkspaceFolder=${localWorkspaceFolder}",
-					"external": true,
-					"icon": "/icon/windsurf.svg",
-					"order": 4
-				},
-				{
 					"slug": "zed",
 					"displayName": "Zed Editor",
 					"url": "zed://ssh/${localEnv:CODER_WORKSPACE_AGENT_NAME}.${localEnv:CODER_WORKSPACE_NAME}.${localEnv:CODER_WORKSPACE_OWNER_NAME}.coder${containerWorkspaceFolder}",
@@ -63,7 +55,6 @@
 					"openIn": "${localEnv:FEATURE_CODE_SERVER_OPTION_APPOPENIN:slim-window}",
 					"share": "${localEnv:FEATURE_CODE_SERVER_OPTION_APPSHARE:owner}",
 					"icon": "/icon/code.svg",
-					"group": "${localEnv:FEATURE_CODE_SERVER_OPTION_APPGROUP:Web Editors}",
 					"order": 3,
 					"healthCheck": {
 						"url": "http://${localEnv:FEATURE_CODE_SERVER_OPTION_HOST:127.0.0.1}:${localEnv:FEATURE_CODE_SERVER_OPTION_PORT:8080}/healthz",
