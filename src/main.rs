@@ -11,7 +11,6 @@ use tracing::{error, info};
 // TODO: Support reconnecting behaviors
 // TODO: Other tournament types
 // TODO: Max move wait time
-// TODO: Show tournament scoreboard after every round of games
 // TODO: Tiebreakers, guarantee some amount of going first
 // TODO: Send moves instantly, sleep only till waiting time
 
@@ -22,15 +21,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
-    let tournament_type = if !demo_mode {
-        if let Some(tourney) = args.get(1) {
-            tourney.clone()
-        } else {
-            "round_robin".to_string()
-        }
-    } else {
-        "round_robin".to_string()
-    };
     let admin_password = env::var("ADMIN_AUTH").unwrap_or_else(|_| String::from("admin"));
     info!("Admin password: {}", admin_password);
     let admin_password = Arc::new(admin_password);
@@ -39,11 +29,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let listener = TcpListener::bind(&addr).await?;
     info!("WebSocket server listening on: {}", addr);
 
-    let server_data = Arc::new(Server::new(
-        admin_password.as_ref().clone(),
-        demo_mode,
-        tournament_type,
-    ));
+    let server_data = Arc::new(Server::new(admin_password.as_ref().clone(), demo_mode));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(stream, addr, server_data.clone()));
@@ -87,7 +73,7 @@ async fn handle_connection(
                         if parts.len() > 1 {
                             let requested_username = parts[1].to_string();
                             if let Err(e) =
-                                sd.handle_connect(addr, tx.clone(), requested_username).await
+                                sd.handle_connect_cmd(addr, tx.clone(), requested_username).await
                             {
                                 error!("handle_connect: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
@@ -96,6 +82,12 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:ID:");
                         }
                     }
+					"DISCONNECT" => {
+						if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
+							error!("handle_disconnect: {}", e);
+							let _ = send(&tx, e.to_string().as_str());
+						}
+					}
                     "READY" => {
                         if let Err(e) = sd.handle_ready(addr, tx.clone()).await {
                             error!("handle_ready: {}", e);
@@ -183,8 +175,11 @@ async fn handle_connection(
                         }
                     }
                     "TOURNAMENT" => {
-                        if parts.get(1) == Some(&"START") {
-                            if let Err(e) = sd.handle_tournament_start(tx.clone(), addr).await {
+                        if parts.get(1) == Some(&"START") && parts.len() > 2 {
+                            if let Err(e) = sd
+                                .handle_tournament_start(tx.clone(), addr, parts[2].to_string())
+                                .await
+                            {
                                 error!("handle_tournament_start: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }

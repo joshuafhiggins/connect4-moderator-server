@@ -116,27 +116,34 @@ impl Tournament for RoundRobin {
             self.is_completed = true;
         }
 
+        let clients_guard = server.clients.read().await;
+        let mut player_scores: Vec<(String, u32)> = Vec::new();
+        for (_, player_addr) in self.players.iter() {
+            let player = clients_guard.get(player_addr).unwrap().read().await;
+            let _ = send(&player.connection.clone(), "TOURNAMENT:END");
+            player_scores.push((player.username.clone(), player.score));
+        }
+        drop(clients_guard);
+
+        player_scores.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut message = "TOURNAMENT:SCORES:".to_string();
+        for (player, score) in player_scores.iter() {
+            message.push_str(&format!("{},{}|", player, score))
+        }
+        message.pop();
+
+        server.broadcast_message_all_observers(&message).await;
+
         if self.is_completed() {
             // Send scores
             let clients_guard = server.clients.read().await;
-            let mut player_scores: Vec<(String, u32)> = Vec::new();
             for (_, player_addr) in self.players.iter() {
                 let mut player = clients_guard.get(player_addr).unwrap().write().await;
                 let _ = send(&player.connection.clone(), "TOURNAMENT:END");
-                player_scores.push((player.username.clone(), player.score));
                 player.score = 0;
                 player.round_robin_id = 0;
             }
-
-            player_scores.sort_by(|a, b| b.1.cmp(&a.1));
-
-            let mut message = "TOURNAMENT:END:".to_string();
-            for (player, score) in player_scores.iter() {
-                message.push_str(&format!("{},{}|", player, score))
-            }
-            message.pop();
-
-            server.broadcast_message_all_observers(&message).await;
         } else {
             // Create next matches
             self.create_matches(&server.clients, &server.matches).await;
