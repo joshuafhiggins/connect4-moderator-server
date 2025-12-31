@@ -604,71 +604,66 @@ impl Server {
         Ok(())
     }
 
-    pub async fn handle_tournament_wait(
+    pub async fn handle_get_data(
         &self,
+        tx: UnboundedSender<Message>,
+        data_id: String,
+    ) -> Result<(), anyhow::Error> {
+        let mut msg = format!("GET:{}:", data_id);
+        match data_id.as_str() {
+            "TOURNAMENT_STATUS" => {
+                let tournament = self.tournament.read().await.clone();
+                if tournament.is_some() {
+                    msg += tournament.as_ref().unwrap().read().await.get_type().as_str();
+                } else {
+                    msg += "false";
+                }
+            }
+            "MOVE_WAIT" => {
+                let wait_time = *self.waiting_timeout.read().await as f64 / 1000f64;
+                msg += wait_time.to_string().as_str();
+            }
+            "DEMO_MODE" => {
+                let demo_mode = *self.demo_mode.read().await;
+                msg += demo_mode.to_string().as_str();
+            }
+            &_ => return Err(anyhow::anyhow!("ERROR:INVALID:GET")),
+        }
+
+        let _ = send(&tx, &msg);
+        Ok(())
+    }
+
+    pub async fn handle_set_data(
+        &self,
+        tx: UnboundedSender<Message>,
         addr: SocketAddr,
-        new_timeout: f64,
+        data_id: String,
+        data_value: String,
     ) -> Result<(), anyhow::Error> {
         if !self.auth_check(addr).await {
             return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
         }
 
-        *self.waiting_timeout.write().await = (new_timeout * 1000.0) as u64;
-        Ok(())
-    }
-
-    pub async fn handle_get_move_wait(
-        &self,
-        tx: UnboundedSender<Message>,
-    ) -> Result<(), anyhow::Error> {
-        let mut msg = "GET:MOVE_WAIT:".to_string();
-        msg += &(*self.waiting_timeout.read().await as f64 / 1000f64).to_string();
-        let _ = send(&tx, &msg);
-        Ok(())
-    }
-
-    pub async fn handle_get_tournament_status(
-        &self,
-        tx: UnboundedSender<Message>,
-    ) -> Result<(), anyhow::Error> {
-        let status = self.tournament.read().await.is_some();
-        let mut msg = "GET:TOURNAMENT_STATUS:".to_string();
-        if status {
-            msg += self.tournament.read().await.as_ref().unwrap().read().await.get_type().as_str();
-        } else {
-            msg += status.to_string().as_str();
-        }
-        let _ = send(&tx, &msg);
-        Ok(())
-    }
-
-    pub async fn handle_get_demo_mode(
-        &self,
-        tx: UnboundedSender<Message>,
-    ) -> Result<(), anyhow::Error> {
-        let demo_mode = *self.demo_mode.read().await;
-        let mut msg = "GET:DEMO_MODE:".to_string();
-        msg += demo_mode.to_string().as_str();
-        let _ = send(&tx, &msg);
-        Ok(())
-    }
-
-    pub async fn handle_set_demo_mode(
-        &self,
-        tx: UnboundedSender<Message>,
-        addr: SocketAddr,
-        demo_mode: bool,
-    ) -> Result<(), anyhow::Error> {
-        if !self.auth_check(addr).await {
-            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+        match data_id.as_str() {
+            "DEMO_MODE" => {
+                let demo_mode = data_value.parse::<bool>();
+                if demo_mode.is_err() {
+                    return Err(anyhow::anyhow!("ERROR:INVALID:SET"));
+                }
+                *self.demo_mode.write().await = demo_mode.unwrap();
+            }
+            "MOVE_WAIT" => {
+                let wait_time = data_value.parse::<f64>();
+                if wait_time.is_err() {
+                    return Err(anyhow::anyhow!("ERROR:INVALID:SET"));
+                }
+                *self.waiting_timeout.write().await = (wait_time.unwrap() * 1000.0) as u64;
+            }
+            &_ => return Err(anyhow::anyhow!("ERROR:INVALID:SET")),
         }
 
-        if self.tournament.read().await.is_some() {
-            return Err(anyhow::anyhow!("ERROR:INVALID:TOURNAMENT"));
-        }
-
-        *self.demo_mode.write().await = demo_mode;
-        let _ = send(&tx, "SET:DEMO_MODE:ACK");
+        let _ = send(&tx, &format!("SET:{}:ACK", data_id));
         Ok(())
     }
 

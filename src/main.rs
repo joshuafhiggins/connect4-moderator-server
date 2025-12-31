@@ -187,39 +187,32 @@ async fn handle_connection(
                                 error!("handle_tournament_cancel: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
-                        } else if parts.get(1) == Some(&"WAIT") && parts.len() > 2 {
-                            match parts[2].parse::<f64>() {
-                                Ok(new_timeout) => {
-                                    if let Err(e) =
-                                        sd.handle_tournament_wait(addr, new_timeout).await
-                                    {
-                                        error!("handle_tournament_wait: {}", e);
-                                        let _ = send(&tx, e.to_string().as_str());
-                                    }
-                                }
-                                Err(_) => {
-                                    let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
-                                }
-                            }
                         } else {
                             let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
                         }
                     }
                     "GET" => {
-                        if parts.get(1) == Some(&"MOVE_WAIT") {
-                            if let Err(e) = sd.handle_get_move_wait(tx.clone()).await {
-                                error!("handle_get_move_wait: {}", e);
-                                let _ = send(&tx, e.to_string().as_str());
-                            }
-                        } else if parts.get(1) == Some(&"TOURNAMENT_STATUS") {
-                            if let Err(e) = sd.handle_get_tournament_status(tx.clone()).await {
-                                error!("handle_get_tournament_status: {}", e);
+                        if let Some(data_id) = parts.get(1) {	
+                            if let Err(e) = sd.handle_get_data(tx.clone(), data_id.to_string()).await {
+                                error!("handle_get_data: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
                         } else {
                             let _ = send(&tx, "ERROR:INVALID:GET");
                         }
                     }
+					"SET" => {
+						if parts.len() > 2 {
+							let data_id = parts[1].to_string();
+							let data_value = parts[2].to_string();
+							if let Err(e) = sd.handle_set_data(tx.clone(), addr, data_id, data_value).await {
+								error!("handle_set_data: {}", e);
+								let _ = send(&tx, e.to_string().as_str());
+							}
+						} else {
+							let _ = send(&tx, "ERROR:INVALID:SET");
+						}
+					}
                     _ => {
                         let _ = send(&tx, "ERROR:UNKNOWN");
                     }
