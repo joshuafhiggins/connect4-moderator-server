@@ -545,6 +545,8 @@ impl Server {
         *tournament_guard = Some(Arc::new(RwLock::new(tourney)));
 
         let _ = crate::send(&tx, "TOURNAMENT:START:ACK");
+
+        self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type)).await;
         Ok(())
     }
 
