@@ -540,7 +540,7 @@ impl Server {
         drop(clients_guard);
 
         let mut tourney = match self.tournament_type.as_str() {
-            "round_robin" => RoundRobin::new(&ready_players),
+            "RoundRobin" => RoundRobin::new(&ready_players),
             &_ => RoundRobin::new(&ready_players),
         };
         tourney.start(&self).await;
