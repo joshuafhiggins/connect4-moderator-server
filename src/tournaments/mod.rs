@@ -16,4 +16,5 @@ pub trait Tournament {
     async fn start(&mut self, server: &Server);
     async fn cancel(&mut self, server: &Server);
     fn is_completed(&self) -> bool;
+    fn get_type(&self) -> String;
 }

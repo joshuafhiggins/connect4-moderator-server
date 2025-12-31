@@ -40,6 +40,7 @@ impl Client {
 
 pub struct Match {
     pub id: u32,
+    pub demo_mode: bool,
     pub board: Vec<Vec<Color>>,
     pub viewers: Vec<SocketAddr>,
     pub ledger: Vec<(Color, usize)>,
@@ -50,7 +51,7 @@ pub struct Match {
 }
 
 impl Match {
-    pub fn new(id: u32, player1: SocketAddr, player2: SocketAddr) -> Match {
+    pub fn new(id: u32, player1: SocketAddr, player2: SocketAddr, demo_mode: bool) -> Match {
         let first = if rand::rng().random_range(0..=1) == 0 {
             player1.to_string().parse().unwrap()
         } else {
@@ -59,6 +60,7 @@ impl Match {
 
         Match {
             id,
+            demo_mode,
             board: vec![vec![Color::None; 6]; 7],
             viewers: Vec::new(),
             ledger: Vec::new(),

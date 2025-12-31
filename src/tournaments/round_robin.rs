@@ -29,6 +29,7 @@ impl RoundRobin {
                 match_id,
                 *player1_addr,
                 *player2_addr,
+                false,
             )));
 
             let match_guard = new_match.read().await;
@@ -184,5 +185,9 @@ impl Tournament for RoundRobin {
 
     fn is_completed(&self) -> bool {
         self.is_completed
+    }
+
+    fn get_type(&self) -> String {
+        "RoundRobin".to_string()
     }
 }
