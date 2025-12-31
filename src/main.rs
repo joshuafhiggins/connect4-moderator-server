@@ -125,6 +125,8 @@ async fn handle_connection(
                                 error!("handle_player_list: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:PLAYER");
                         }
                     }
                     "GAME" => {
@@ -159,6 +161,8 @@ async fn handle_connection(
                                     let _ = send(&tx, "ERROR:INVALID:TERMINATE");
                                 }
                             }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:GAME");
                         }
                     }
                     "ADMIN" => {
@@ -174,6 +178,8 @@ async fn handle_connection(
                                 error!("handle_admin_kick: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:ADMIN");
                         }
                     }
                     "TOURNAMENT" => {
@@ -201,6 +207,8 @@ async fn handle_connection(
                                     let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
                                 }
                             }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:TOURNAMENT");
                         }
                     }
                     "GET" => {
@@ -214,6 +222,8 @@ async fn handle_connection(
                                 error!("handle_get_tournament_status: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:GET");
                         }
                     }
                     _ => {
