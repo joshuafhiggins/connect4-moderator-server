@@ -87,7 +87,7 @@ async fn handle_connection(
                         if parts.len() > 1 {
                             let requested_username = parts[1].to_string();
                             if let Err(e) =
-                                sd.handle_connect(addr, tx.clone(), requested_username).await
+                                sd.handle_connect_cmd(addr, tx.clone(), requested_username).await
                             {
                                 error!("handle_connect: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
@@ -96,6 +96,12 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:ID:");
                         }
                     }
+					"DISCONNECT" => {
+						if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
+							error!("handle_disconnect: {}", e);
+							let _ = send(&tx, e.to_string().as_str());
+						}
+					}
                     "READY" => {
                         if let Err(e) = sd.handle_ready(addr, tx.clone()).await {
                             error!("handle_ready: {}", e);
