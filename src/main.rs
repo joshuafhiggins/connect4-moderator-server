@@ -21,15 +21,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
-    let tournament_type = if !demo_mode {
-        if let Some(tourney) = args.get(1) {
-            tourney.clone()
-        } else {
-            "round_robin".to_string()
-        }
-    } else {
-        "round_robin".to_string()
-    };
     let admin_password = env::var("ADMIN_AUTH").unwrap_or_else(|_| String::from("admin"));
     info!("Admin password: {}", admin_password);
     let admin_password = Arc::new(admin_password);
@@ -38,11 +29,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let listener = TcpListener::bind(&addr).await?;
     info!("WebSocket server listening on: {}", addr);
 
-    let server_data = Arc::new(Server::new(
-        admin_password.as_ref().clone(),
-        demo_mode,
-        tournament_type,
-    ));
+    let server_data = Arc::new(Server::new(admin_password.as_ref().clone(), demo_mode));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(stream, addr, server_data.clone()));
@@ -188,8 +175,11 @@ async fn handle_connection(
                         }
                     }
                     "TOURNAMENT" => {
-                        if parts.get(1) == Some(&"START") {
-                            if let Err(e) = sd.handle_tournament_start(tx.clone(), addr).await {
+                        if parts.get(1) == Some(&"START") && parts.len() > 2 {
+                            if let Err(e) = sd
+                                .handle_tournament_start(tx.clone(), addr, parts[2].to_string())
+                                .await
+                            {
                                 error!("handle_tournament_start: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }

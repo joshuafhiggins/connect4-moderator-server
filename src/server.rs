@@ -10,11 +10,10 @@ pub struct Server {
     pub tournament: WrappedTournament,
     pub waiting_timeout: Arc<RwLock<u64>>,
     pub demo_mode: bool,
-    pub tournament_type: String,
 }
 
 impl Server {
-    pub fn new(admin_password: String, demo_mode: bool, tournament_type: String) -> Server {
+    pub fn new(admin_password: String, demo_mode: bool) -> Server {
         Server {
             clients: Arc::new(RwLock::new(HashMap::new())),
             usernames: Arc::new(RwLock::new(HashMap::new())),
@@ -25,7 +24,6 @@ impl Server {
             tournament: Arc::new(RwLock::new(None)),
             waiting_timeout: Arc::new(RwLock::new(5000)),
             demo_mode,
-            tournament_type,
         }
     }
 
@@ -543,6 +541,7 @@ impl Server {
         &self,
         tx: UnboundedSender<Message>,
         addr: SocketAddr,
+        tournament_type: String,
     ) -> Result<(), anyhow::Error> {
         if !self.auth_check(addr).await {
             return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
@@ -566,7 +565,7 @@ impl Server {
 
         drop(clients_guard);
 
-        let mut tourney = match self.tournament_type.as_str() {
+        let mut tourney = match tournament_type.as_str() {
             "round_robin" => crate::tournaments::round_robin::RoundRobin::new(&ready_players),
             &_ => crate::tournaments::round_robin::RoundRobin::new(&ready_players),
         };
