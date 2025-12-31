@@ -122,7 +122,7 @@ impl Tournament for RoundRobin {
             let _ = send(&player.connection.clone(), "TOURNAMENT:END");
             player_scores.push((player.username.clone(), player.score));
         }
-		drop(clients_guard);
+        drop(clients_guard);
 
         player_scores.sort_by(|a, b| b.1.cmp(&a.1));
 
