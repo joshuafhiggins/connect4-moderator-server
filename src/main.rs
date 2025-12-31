@@ -1,5 +1,4 @@
-use connect4_moderator_server::types::*;
-use connect4_moderator_server::*;
+use connect4_moderator_server::{server::Server, *};
 use futures_util::{SinkExt, StreamExt};
 use std::env;
 use std::net::SocketAddr;
@@ -151,9 +150,7 @@ async fn handle_connection(
                         } else if parts.get(1) == Some(&"TERMINATE") && parts.len() > 2 {
                             match parts[2].parse::<u32>() {
                                 Ok(match_id) => {
-                                    if let Err(e) =
-                                        sd.handle_game_terminate(tx.clone(), addr, match_id).await
-                                    {
+                                    if let Err(e) = sd.handle_game_terminate(addr, match_id).await {
                                         error!("handle_game_terminate: {}", e);
                                         let _ = send(&tx, e.to_string().as_str());
                                     }
@@ -173,9 +170,7 @@ async fn handle_connection(
                                 let _ = send(&tx, e.to_string().as_str());
                             }
                         } else if parts.get(1) == Some(&"KICK") && parts.len() > 2 {
-                            if let Err(e) =
-                                sd.handle_admin_kick(tx.clone(), addr, parts[2].to_string()).await
-                            {
+                            if let Err(e) = sd.handle_admin_kick(addr, parts[2].to_string()).await {
                                 error!("handle_admin_kick: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
@@ -194,9 +189,9 @@ async fn handle_connection(
                             }
                         } else if parts.get(1) == Some(&"WAIT") && parts.len() > 2 {
                             match parts[2].parse::<f64>() {
-                                Ok(v) => {
+                                Ok(new_timeout) => {
                                     if let Err(e) =
-                                        sd.handle_tournament_wait(tx.clone(), addr, v).await
+                                        sd.handle_tournament_wait(addr, new_timeout).await
                                     {
                                         error!("handle_tournament_wait: {}", e);
                                         let _ = send(&tx, e.to_string().as_str());
@@ -252,14 +247,7 @@ async fn handle_connection(
         let username = client.username.clone();
         if let Some(match_id) = client.current_match {
             drop(client);
-            terminate_match(
-                match_id,
-                &sd.matches,
-                &sd.clients,
-                &sd.observers,
-                sd.demo_mode,
-            )
-            .await;
+            sd.terminate_match(match_id).await;
         } else {
             drop(client);
         }

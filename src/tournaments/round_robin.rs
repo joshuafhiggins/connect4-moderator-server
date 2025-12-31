@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use async_trait::async_trait;
 
-use crate::*;
+use crate::{server::Server, *};
 
 #[derive(Clone)]
 pub struct RoundRobin {
@@ -94,7 +94,7 @@ impl Tournament for RoundRobin {
         result
     }
 
-    async fn next(&mut self, clients: &Clients, matches: &Matches, observers: &Observers) {
+    async fn next(&mut self, server: &Server) {
         if self.is_completed {
             return;
         }
@@ -117,7 +117,7 @@ impl Tournament for RoundRobin {
 
         if self.is_completed() {
             // Send scores
-            let clients_guard = clients.read().await;
+            let clients_guard = server.clients.read().await;
             let mut player_scores: Vec<(String, u32)> = Vec::new();
             for (_, player_addr) in self.players.iter() {
                 let mut player = clients_guard.get(player_addr).unwrap().write().await;
@@ -135,20 +135,20 @@ impl Tournament for RoundRobin {
             }
             message.pop();
 
-            broadcast_message_all_observers(observers, &message).await;
+            server.broadcast_message_all_observers(&message).await;
         } else {
             // Create next matches
-            self.create_matches(clients, matches).await;
+            self.create_matches(&server.clients, &server.matches).await;
         }
     }
 
-    async fn start(&mut self, clients: &Clients, matches: &Matches) {
-        self.create_matches(clients, matches).await;
+    async fn start(&mut self, server: &Server) {
+        self.create_matches(&server.clients, &server.matches).await;
     }
 
-    async fn cancel(&mut self, clients: &Clients, matches: &Matches, observers: &Observers) {
+    async fn cancel(&mut self, server: &Server) {
         for (_, addr) in self.players.iter() {
-            let clients_guard = clients.read().await;
+            let clients_guard = server.clients.read().await;
 
             let client = clients_guard.get(addr);
             if client.is_none() {
@@ -167,7 +167,7 @@ impl Tournament for RoundRobin {
             drop(client);
             drop(clients_guard);
 
-            terminate_match(match_id, matches, clients, observers, false).await;
+            server.terminate_match(match_id).await;
 
             if !client_ready {
                 let _ = send(&client_connection, "TOURNAMENT:END");
