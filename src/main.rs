@@ -11,7 +11,6 @@ use tracing::{error, info};
 // TODO: Support reconnecting behaviors
 // TODO: Other tournament types
 // TODO: Max move wait time
-// TODO: Show tournament scoreboard after every round of games
 // TODO: Tiebreakers, guarantee some amount of going first
 // TODO: Send moves instantly, sleep only till waiting time
 
