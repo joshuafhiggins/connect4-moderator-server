@@ -82,12 +82,12 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:ID:");
                         }
                     }
-					"DISCONNECT" => {
-						if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
-							error!("handle_disconnect: {}", e);
-							let _ = send(&tx, e.to_string().as_str());
-						}
-					}
+                    "DISCONNECT" => {
+                        if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
+                            error!("handle_disconnect: {}", e);
+                            let _ = send(&tx, e.to_string().as_str());
+                        }
+                    }
                     "READY" => {
                         if let Err(e) = sd.handle_ready(addr, tx.clone()).await {
                             error!("handle_ready: {}", e);
@@ -176,15 +176,14 @@ async fn handle_connection(
                     }
                     "TOURNAMENT" => {
                         if parts.get(1) == Some(&"START") && parts.len() > 2 {
-                            if let Err(e) = sd
-                                .handle_tournament_start(tx.clone(), addr, parts[2].to_string())
-                                .await
+                            if let Err(e) =
+                                sd.handle_tournament_start(addr, parts[2].to_string()).await
                             {
                                 error!("handle_tournament_start: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
                         } else if parts.get(1) == Some(&"CANCEL") {
-                            if let Err(e) = sd.handle_tournament_cancel(tx.clone(), addr).await {
+                            if let Err(e) = sd.handle_tournament_cancel(addr).await {
                                 error!("handle_tournament_cancel: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }

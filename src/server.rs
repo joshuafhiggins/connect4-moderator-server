@@ -10,7 +10,6 @@ pub struct Server {
     pub tournament: WrappedTournament,
     pub waiting_timeout: Arc<RwLock<u64>>,
     pub demo_mode: Arc<RwLock<bool>>,
-    pub tournament_type: String,
 }
 
 impl Server {
@@ -25,7 +24,6 @@ impl Server {
             tournament: Arc::new(RwLock::new(None)),
             waiting_timeout: Arc::new(RwLock::new(5000)),
             demo_mode: Arc::new(RwLock::new(demo_mode)),
-            tournament_type,
         }
     }
 
@@ -73,7 +71,11 @@ impl Server {
         Ok(())
     }
 
-    pub async fn handle_disconnect_cmd(&self, addr: SocketAddr, tx: UnboundedSender<Message>) -> Result<(), anyhow::Error> {
+    pub async fn handle_disconnect_cmd(
+        &self,
+        addr: SocketAddr,
+        tx: UnboundedSender<Message>,
+    ) -> Result<(), anyhow::Error> {
         let clients_guard = self.clients.read().await;
         let client_opt = clients_guard.get(&addr).cloned();
 
@@ -545,7 +547,6 @@ impl Server {
 
     pub async fn handle_tournament_start(
         &self,
-        tx: UnboundedSender<Message>,
         addr: SocketAddr,
         tournament_type: String,
     ) -> Result<(), anyhow::Error> {
@@ -571,7 +572,7 @@ impl Server {
 
         drop(clients_guard);
 
-        let mut tourney = match self.tournament_type.as_str() {
+        let mut tourney = match tournament_type.as_str() {
             "RoundRobin" => RoundRobin::new(&ready_players),
             &_ => RoundRobin::new(&ready_players),
         };
@@ -580,17 +581,12 @@ impl Server {
         let mut tournament_guard = self.tournament.write().await;
         *tournament_guard = Some(Arc::new(RwLock::new(tourney)));
 
-        let _ = crate::send(&tx, "TOURNAMENT:START:ACK");
-
-        self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type)).await;
+        self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type))
+            .await;
         Ok(())
     }
 
-    pub async fn handle_tournament_cancel(
-        &self,
-        tx: UnboundedSender<Message>,
-        addr: SocketAddr,
-    ) -> Result<(), anyhow::Error> {
+    pub async fn handle_tournament_cancel(&self, addr: SocketAddr) -> Result<(), anyhow::Error> {
         if !self.auth_check(addr).await {
             return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
         }
@@ -604,7 +600,7 @@ impl Server {
         tourney.write().await.cancel(&self).await;
         *tournament_guard = None;
 
-        let _ = send(&tx, "TOURNAMENT:CANCEL:ACK");
+        self.broadcast_message_all_observers("TOURNAMENT:CANCEL").await;
         Ok(())
     }
 
