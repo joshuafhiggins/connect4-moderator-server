@@ -1,4 +1,4 @@
-use crate::{tournaments::Tournament, types::*, *};
+use crate::{tournaments::*, types::*, *};
 
 pub struct Server {
     pub clients: Clients,
@@ -67,7 +67,7 @@ impl Server {
             ))),
         );
 
-        let _ = crate::send(&tx, "CONNECT:ACK");
+        let _ = send(&tx, "CONNECT:ACK");
         Ok(())
     }
 
@@ -88,11 +88,11 @@ impl Server {
 
         let mut client = clients_guard.get(&addr).unwrap().write().await;
         client.ready = true;
-        let _ = crate::send(&tx, "READY:ACK");
+        let _ = send(&tx, "READY:ACK");
 
         let is_demo_mode = self.demo_mode.read().await.clone();
         if is_demo_mode {
-            let match_id: u32 = crate::gen_match_id(&self.matches).await;
+            let match_id: u32 = gen_match_id(&self.matches).await;
             let new_match = Arc::new(RwLock::new(Match::new(
                 match_id,
                 addr.to_string().parse()?,
@@ -103,7 +103,7 @@ impl Server {
             client.ready = false;
             client.current_match = Some(match_id);
             client.color = Color::Red;
-            let _ = crate::send(&tx, "GAME:START:1");
+            let _ = send(&tx, "GAME:START:1");
         }
 
         Ok(())
@@ -152,7 +152,7 @@ impl Server {
             || (current_match.ledger.last().is_some()
                 && current_match.ledger.last().unwrap().0 == client.color)
         {
-            let _ = crate::send(&tx, "ERROR:INVALID:MOVE");
+            let _ = send(&tx, "ERROR:INVALID:MOVE");
             invalid = true;
         }
 
@@ -165,12 +165,12 @@ impl Server {
 
         // Check if valid move
         if column >= 7 && !invalid {
-            let _ = crate::send(&tx, "ERROR:INVALID:MOVE");
+            let _ = send(&tx, "ERROR:INVALID:MOVE");
             invalid = true;
         }
 
         if current_match.board[column][5] != Color::None && !invalid {
-            let _ = crate::send(&tx, "ERROR:INVALID:MOVE");
+            let _ = send(&tx, "ERROR:INVALID:MOVE");
             invalid = true;
         }
 
@@ -189,8 +189,8 @@ impl Server {
                 self.terminate_match(current_match_id).await;
                 tx.send(Message::Close(None))?;
             } else {
-                let _ = crate::send(&tx, "GAME:LOSS");
-                let _ = crate::send(&opponent_connection, "GAME:WINS");
+                let _ = send(&tx, "GAME:LOSS");
+                let _ = send(&opponent_connection, "GAME:WINS");
                 self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent_username)).await;
 
                 let mut clients_guard = self.clients.write().await;
@@ -226,9 +226,9 @@ impl Server {
 
         if winner != Color::None {
             if winner == client.color {
-                let _ = crate::send(&tx, "GAME:WINS");
+                let _ = send(&tx, "GAME:WINS");
                 if !current_match.demo_mode {
-                    let _ = crate::send(&opponent_connection, "GAME:LOSS");
+                    let _ = send(&opponent_connection, "GAME:LOSS");
                 }
                 self.broadcast_message(
                     &current_match.viewers,
@@ -236,9 +236,9 @@ impl Server {
                 )
                 .await;
             } else {
-                let _ = crate::send(&tx, "GAME:LOSS");
+                let _ = send(&tx, "GAME:LOSS");
                 if !current_match.demo_mode {
-                    let _ = crate::send(&opponent_connection, "GAME:WINS");
+                    let _ = send(&opponent_connection, "GAME:WINS");
                 }
                 self.broadcast_message(
                     &current_match.viewers,
@@ -247,9 +247,9 @@ impl Server {
                 .await;
             }
         } else if filled {
-            let _ = crate::send(&tx, "GAME:DRAW");
+            let _ = send(&tx, "GAME:DRAW");
             if !current_match.demo_mode {
-                let _ = crate::send(&opponent_connection, "GAME:DRAW");
+                let _ = send(&opponent_connection, "GAME:DRAW");
             }
             self.broadcast_message(&current_match.viewers, "GAME:DRAW").await;
         }
@@ -304,7 +304,7 @@ impl Server {
         let column_to_use = if !current_match.demo_mode {
             column
         } else {
-            crate::random_move(&current_match.board)
+            random_move(&current_match.board)
         };
         if current_match.demo_mode {
             let move_to_dispatch = current_match.move_to_dispatch.clone();
@@ -329,7 +329,7 @@ impl Server {
             current_match.move_to_dispatch = (Color::None, 0);
 
             if demo_mode_move {
-                crate::broadcast_message(
+                broadcast_message(
                     &observers_move,
                     &current_match.viewers,
                     &format!("GAME:MOVE:{}:{}", "demo", column_to_use),
@@ -340,7 +340,7 @@ impl Server {
             drop(current_match);
             drop(matches_guard);
 
-            let _ = crate::send(&connection_to_send, &format!("OPPONENT:{}", column_to_use));
+            let _ = send(&connection_to_send, &format!("OPPONENT:{}", column_to_use));
         }));
 
         Ok(())
@@ -370,7 +370,7 @@ impl Server {
             to_send.remove(to_send.len() - 1);
         }
 
-        let _ = crate::send(&tx, to_send.as_str());
+        let _ = send(&tx, to_send.as_str());
         Ok(())
     }
 
@@ -401,7 +401,7 @@ impl Server {
             to_send.remove(to_send.len() - 1);
         }
 
-        let _ = crate::send(&tx, to_send.as_str());
+        let _ = send(&tx, to_send.as_str());
         Ok(())
     }
 
@@ -443,7 +443,7 @@ impl Server {
 
         message.pop();
 
-        let _ = crate::send(&tx, &message);
+        let _ = send(&tx, &message);
         Ok(())
     }
 
@@ -463,7 +463,7 @@ impl Server {
 
         let mut admin_guard = self.admin.write().await;
         *admin_guard = Some(addr.to_string().parse()?);
-        let _ = crate::send(&tx, "ADMIN:AUTH:ACK");
+        let _ = send(&tx, "ADMIN:AUTH:ACK");
         Ok(())
     }
 
@@ -540,15 +540,15 @@ impl Server {
         drop(clients_guard);
 
         let mut tourney = match self.tournament_type.as_str() {
-            "round_robin" => crate::tournaments::round_robin::RoundRobin::new(&ready_players),
-            &_ => crate::tournaments::round_robin::RoundRobin::new(&ready_players),
+            "round_robin" => RoundRobin::new(&ready_players),
+            &_ => RoundRobin::new(&ready_players),
         };
         tourney.start(&self).await;
 
         let mut tournament_guard = self.tournament.write().await;
         *tournament_guard = Some(Arc::new(RwLock::new(tourney)));
 
-        let _ = crate::send(&tx, "TOURNAMENT:START:ACK");
+        let _ = send(&tx, "TOURNAMENT:START:ACK");
         Ok(())
     }
 
@@ -570,7 +570,7 @@ impl Server {
         tourney.write().await.cancel(&self).await;
         *tournament_guard = None;
 
-        let _ = crate::send(&tx, "TOURNAMENT:CANCEL:ACK");
+        let _ = send(&tx, "TOURNAMENT:CANCEL:ACK");
         Ok(())
     }
 
@@ -593,7 +593,7 @@ impl Server {
     ) -> Result<(), anyhow::Error> {
         let mut msg = "GET:MOVE_WAIT:".to_string();
         msg += &(*self.waiting_timeout.read().await as f64 / 1000f64).to_string();
-        let _ = crate::send(&tx, &msg);
+        let _ = send(&tx, &msg);
         Ok(())
     }
 
@@ -608,7 +608,7 @@ impl Server {
         } else {
             msg += status.to_string().as_str();
         }
-        let _ = crate::send(&tx, &msg);
+        let _ = send(&tx, &msg);
         Ok(())
     }
 
@@ -619,7 +619,7 @@ impl Server {
         let demo_mode = *self.demo_mode.read().await;
         let mut msg = "GET:DEMO_MODE:".to_string();
         msg += demo_mode.to_string().as_str();
-        let _ = crate::send(&tx, &msg);
+        let _ = send(&tx, &msg);
         Ok(())
     }
 
@@ -638,7 +638,7 @@ impl Server {
         }
 
         *self.demo_mode.write().await = demo_mode;
-        let _ = crate::send(&tx, "SET:DEMO_MODE:ACK");
+        let _ = send(&tx, "SET:DEMO_MODE:ACK");
         Ok(())
     }
 
