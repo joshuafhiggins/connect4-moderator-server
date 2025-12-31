@@ -9,7 +9,7 @@ pub struct Server {
     pub admin_password: Arc<String>,
     pub tournament: WrappedTournament,
     pub waiting_timeout: Arc<RwLock<u64>>,
-    pub demo_mode: bool,
+    pub demo_mode: Arc<RwLock<bool>>,
     pub tournament_type: String,
 }
 
@@ -24,7 +24,7 @@ impl Server {
             admin_password: Arc::new(admin_password),
             tournament: Arc::new(RwLock::new(None)),
             waiting_timeout: Arc::new(RwLock::new(5000)),
-            demo_mode,
+            demo_mode: Arc::new(RwLock::new(demo_mode)),
             tournament_type,
         }
     }
@@ -90,12 +90,14 @@ impl Server {
         client.ready = true;
         let _ = crate::send(&tx, "READY:ACK");
 
-        if self.demo_mode {
+        let is_demo_mode = self.demo_mode.read().await.clone();
+        if is_demo_mode {
             let match_id: u32 = crate::gen_match_id(&self.matches).await;
             let new_match = Arc::new(RwLock::new(Match::new(
                 match_id,
                 addr.to_string().parse()?,
                 addr.to_string().parse()?,
+                is_demo_mode,
             )));
             self.matches.write().await.insert(match_id, new_match.clone());
             client.ready = false;
@@ -175,6 +177,7 @@ impl Server {
         // Terminate games if a player makes an invalid move
         if invalid {
             let current_match_id = current_match.id;
+            let is_demo_mode = current_match.demo_mode;
             let viewers = current_match.viewers.clone();
 
             drop(current_match);
@@ -182,7 +185,7 @@ impl Server {
             drop(client);
             drop(clients_guard);
 
-            if self.demo_mode {
+            if is_demo_mode {
                 self.terminate_match(current_match_id).await;
                 tx.send(Message::Close(None))?;
             } else {
@@ -224,7 +227,7 @@ impl Server {
         if winner != Color::None {
             if winner == client.color {
                 let _ = crate::send(&tx, "GAME:WINS");
-                if !self.demo_mode {
+                if !current_match.demo_mode {
                     let _ = crate::send(&opponent_connection, "GAME:LOSS");
                 }
                 self.broadcast_message(
@@ -234,7 +237,7 @@ impl Server {
                 .await;
             } else {
                 let _ = crate::send(&tx, "GAME:LOSS");
-                if !self.demo_mode {
+                if !current_match.demo_mode {
                     let _ = crate::send(&opponent_connection, "GAME:WINS");
                 }
                 self.broadcast_message(
@@ -245,7 +248,7 @@ impl Server {
             }
         } else if filled {
             let _ = crate::send(&tx, "GAME:DRAW");
-            if !self.demo_mode {
+            if !current_match.demo_mode {
                 let _ = crate::send(&opponent_connection, "GAME:DRAW");
             }
             self.broadcast_message(&current_match.viewers, "GAME:DRAW").await;
@@ -254,6 +257,7 @@ impl Server {
         // remove match from matchmaker
         if winner != Color::None || filled {
             let current_match_id = current_match.id;
+            let is_demo_mode = current_match.demo_mode;
 
             drop(client);
             drop(current_match);
@@ -277,7 +281,7 @@ impl Server {
             drop(opponent);
             matches_guard.remove(&current_match_id).unwrap();
 
-            if !self.demo_mode && matches_guard.is_empty() {
+            if !is_demo_mode && matches_guard.is_empty() {
                 drop(matches_guard);
                 drop(clients_guard);
 
@@ -292,17 +296,17 @@ impl Server {
             return Ok(());
         }
 
-        let connection_to_send = if !self.demo_mode {
+        let connection_to_send = if !current_match.demo_mode {
             opponent_connection.clone()
         } else {
             tx.clone()
         };
-        let column_to_use = if !self.demo_mode {
+        let column_to_use = if !current_match.demo_mode {
             column
         } else {
             crate::random_move(&current_match.board)
         };
-        if self.demo_mode {
+        if current_match.demo_mode {
             let move_to_dispatch = current_match.move_to_dispatch.clone();
             current_match.ledger.push(move_to_dispatch);
             current_match.move_to_dispatch = (Color::Yellow, column_to_use);
@@ -314,7 +318,7 @@ impl Server {
         let matches_move = self.matches.clone();
         let observers_move = self.observers.clone();
         let match_id_move = current_match.id;
-        let demo_mode_move = self.demo_mode;
+        let demo_mode_move = current_match.demo_mode;
         current_match.wait_thread = Some(tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(waiting as u64)).await;
 
@@ -418,7 +422,7 @@ impl Server {
         let player1 = clients_guard.get(&the_match.player1).unwrap().read().await.username.clone();
         let mut player2 =
             clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
-        if self.demo_mode {
+        if the_match.demo_mode {
             player2 = "demo".to_string();
         }
         let ledger = the_match.ledger.clone();
@@ -497,7 +501,7 @@ impl Server {
 
         self.terminate_match(match_id).await;
 
-        if !self.demo_mode && self.matches.read().await.is_empty() {
+        if self.tournament.read().await.is_some() && self.matches.read().await.is_empty() {
             let mut tournament_guard = self.tournament.write().await;
             let tourney = tournament_guard.as_mut().unwrap();
             tourney.write().await.next(&self).await;
@@ -517,7 +521,7 @@ impl Server {
             return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
         }
 
-        if self.tournament.read().await.is_some() || self.demo_mode {
+        if self.tournament.read().await.is_some() {
             return Err(anyhow::anyhow!("ERROR:INVALID:TOURNAMENT"));
         }
 
@@ -557,7 +561,7 @@ impl Server {
             return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
         }
 
-        if self.tournament.read().await.is_none() || self.demo_mode {
+        if self.tournament.read().await.is_none() {
             return Err(anyhow::anyhow!("ERROR:INVALID:TOURNAMENT"));
         }
 
@@ -598,13 +602,43 @@ impl Server {
         tx: UnboundedSender<Message>,
     ) -> Result<(), anyhow::Error> {
         let status = self.tournament.read().await.is_some();
-        if self.demo_mode {
-            let _ = crate::send(&tx, "GET:TOURNAMENT_STATUS:DEMO");
+        let mut msg = "GET:TOURNAMENT_STATUS:".to_string();
+        if status {
+            msg += self.tournament.read().await.as_ref().unwrap().read().await.get_type().as_str();
         } else {
-            let mut msg = "GET:TOURNAMENT_STATUS:".to_string();
             msg += status.to_string().as_str();
-            let _ = crate::send(&tx, &msg);
         }
+        let _ = crate::send(&tx, &msg);
+        Ok(())
+    }
+
+    pub async fn handle_get_demo_mode(
+        &self,
+        tx: UnboundedSender<Message>,
+    ) -> Result<(), anyhow::Error> {
+        let demo_mode = *self.demo_mode.read().await;
+        let mut msg = "GET:DEMO_MODE:".to_string();
+        msg += demo_mode.to_string().as_str();
+        let _ = crate::send(&tx, &msg);
+        Ok(())
+    }
+
+    pub async fn handle_set_demo_mode(
+        &self,
+        tx: UnboundedSender<Message>,
+        addr: SocketAddr,
+        demo_mode: bool,
+    ) -> Result<(), anyhow::Error> {
+        if !self.auth_check(addr).await {
+            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+        }
+
+        if self.tournament.read().await.is_some() {
+            return Err(anyhow::anyhow!("ERROR:INVALID:TOURNAMENT"));
+        }
+
+        *self.demo_mode.write().await = demo_mode;
+        let _ = crate::send(&tx, "SET:DEMO_MODE:ACK");
         Ok(())
     }
 
@@ -660,7 +694,7 @@ impl Server {
         player1.color = Color::None;
         drop(player1);
 
-        if !self.demo_mode {
+        if !the_match.demo_mode {
             let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
             let _ = send(&player2.connection, "GAME:TERMINATED");
             player2.current_match = None;
