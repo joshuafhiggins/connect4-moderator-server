@@ -41,6 +41,13 @@ impl Server {
             )));
         }
 
+        if requested_username == SERVER_PLAYER_USERNAME {
+            return Err(anyhow::anyhow!(format!(
+                "ERROR:INVALID:ID:{}",
+                requested_username
+            )));
+        }
+
         let clients_guard = self.clients.read().await;
         for client in clients_guard.values() {
             if requested_username == client.read().await.username {
@@ -129,14 +136,19 @@ impl Server {
             let new_match = Arc::new(RwLock::new(Match::new(
                 match_id,
                 addr.to_string().parse()?,
-                addr.to_string().parse()?,
+                SERVER_PLAYER_ADDR.to_string().parse()?,
                 is_demo_mode,
             )));
             self.matches.write().await.insert(match_id, new_match.clone());
             client.ready = false;
             client.current_match = Some(match_id);
-            client.color = Color::Red;
-            let _ = send(&tx, "GAME:START:1");
+            client.color = if new_match.read().await.player1 == addr {
+                let _ = send(&tx, "GAME:START:1");
+                Color::Red
+            } else {
+                let _ = send(&tx, "GAME:START:0");
+                Color::Yellow
+            };
         }
 
         Ok(())
@@ -305,16 +317,19 @@ impl Server {
             client.color = Color::None;
             drop(client);
 
-            let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
-            if opponent.color == winner {
-                opponent.score += 1;
+            if !is_demo_mode {
+                let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
+                if opponent.color == winner {
+                    opponent.score += 1;
+                }
+                opponent.current_match = None;
+                opponent.color = Color::None;
+                drop(opponent);
             }
-            opponent.current_match = None;
-            opponent.color = Color::None;
-            drop(opponent);
+
             matches_guard.remove(&current_match_id).unwrap();
 
-            if !is_demo_mode && matches_guard.is_empty() {
+            if self.tournament.read().await.is_some() && matches_guard.is_empty() {
                 drop(matches_guard);
                 drop(clients_guard);
 
@@ -323,6 +338,11 @@ impl Server {
                 tourney.write().await.next(&self).await;
                 if tourney.read().await.is_completed() {
                     *tournament_guard = None;
+                }
+            } else if self.tournament.read().await.is_none() {
+                let _ = send(&tx, "TOURNAMENT:END");
+                if !is_demo_mode {
+                    let _ = send(&opponent_connection, "TOURNAMENT:END");
                 }
             }
 
@@ -342,8 +362,8 @@ impl Server {
         if current_match.demo_mode {
             let move_to_dispatch = current_match.move_to_dispatch.clone();
             current_match.ledger.push(move_to_dispatch);
-            current_match.move_to_dispatch = (Color::Yellow, column_to_use);
-            current_match.place_token(Color::Yellow, column_to_use);
+            current_match.move_to_dispatch = (!client.color, column_to_use);
+            current_match.place_token(!client.color, column_to_use);
         }
 
         let waiting =
@@ -452,12 +472,19 @@ impl Server {
         let clients_guard = self.clients.read().await;
         let matches_guard = self.matches.read().await;
         let the_match = matches_guard.get(&match_id).unwrap().read().await;
-        let player1 = clients_guard.get(&the_match.player1).unwrap().read().await.username.clone();
-        let mut player2 =
-            clients_guard.get(&the_match.player2).unwrap().read().await.username.clone();
-        if the_match.demo_mode {
-            player2 = "demo".to_string();
-        }
+
+        let player1 = if !the_match.player1.to_string().eq(SERVER_PLAYER_ADDR) {
+            clients_guard.get(&the_match.player1).unwrap().read().await.username.clone()
+        } else {
+            SERVER_PLAYER_USERNAME.to_string()
+        };
+
+        let player2 = if !the_match.player2.to_string().eq(SERVER_PLAYER_ADDR) {
+            clients_guard.get(&the_match.player2).unwrap().read().await.username.clone()
+        } else {
+            SERVER_PLAYER_USERNAME.to_string()
+        };
+
         let ledger = the_match.ledger.clone();
 
         drop(clients_guard);
@@ -733,20 +760,19 @@ impl Server {
         self.broadcast_message(&the_match.viewers, "GAME:TERMINATED").await;
 
         let clients_guard = self.clients.read().await;
-        let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
-        let _ = send(&player1.connection, "GAME:TERMINATED");
-        player1.current_match = None;
-        player1.color = Color::None;
-        drop(player1);
+		if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
+			let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
+			let _ = send(&player1.connection, "GAME:TERMINATED");
+            player1.current_match = None;
+            player1.color = Color::None;
+		}
 
-        if !the_match.demo_mode {
-            let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
-            let _ = send(&player2.connection, "GAME:TERMINATED");
+        if the_match.player2 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
+			let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
+			let _ = send(&player2.connection, "GAME:TERMINATED");
             player2.current_match = None;
             player2.color = Color::None;
-            drop(player2);
-        }
-
+		}
         drop(clients_guard);
 
         drop(the_match);
