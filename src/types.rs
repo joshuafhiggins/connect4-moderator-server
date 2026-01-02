@@ -1,14 +1,26 @@
 use rand::Rng;
 use std::net::SocketAddr;
-use std::vec;
+use std::{ops, vec};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::Message;
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum Color {
     Red,
     Yellow,
     None,
+}
+
+impl ops::Not for Color {
+    type Output = Color;
+
+    fn not(self) -> Color {
+        match self {
+            Color::Red => Color::Yellow,
+            Color::Yellow => Color::Red,
+            Color::None => Color::None,
+        }
+    }
 }
 
 #[derive(Clone)]

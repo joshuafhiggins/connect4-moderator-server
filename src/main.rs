@@ -192,8 +192,10 @@ async fn handle_connection(
                         }
                     }
                     "GET" => {
-                        if let Some(data_id) = parts.get(1) {	
-                            if let Err(e) = sd.handle_get_data(tx.clone(), data_id.to_string()).await {
+                        if let Some(data_id) = parts.get(1) {
+                            if let Err(e) =
+                                sd.handle_get_data(tx.clone(), data_id.to_string()).await
+                            {
                                 error!("handle_get_data: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
@@ -201,18 +203,20 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:GET");
                         }
                     }
-					"SET" => {
-						if parts.len() > 2 {
-							let data_id = parts[1].to_string();
-							let data_value = parts[2].to_string();
-							if let Err(e) = sd.handle_set_data(tx.clone(), addr, data_id, data_value).await {
-								error!("handle_set_data: {}", e);
-								let _ = send(&tx, e.to_string().as_str());
-							}
-						} else {
-							let _ = send(&tx, "ERROR:INVALID:SET");
-						}
-					}
+                    "SET" => {
+                        if parts.len() > 2 {
+                            let data_id = parts[1].to_string();
+                            let data_value = parts[2].to_string();
+                            if let Err(e) =
+                                sd.handle_set_data(tx.clone(), addr, data_id, data_value).await
+                            {
+                                error!("handle_set_data: {}", e);
+                                let _ = send(&tx, e.to_string().as_str());
+                            }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:SET");
+                        }
+                    }
                     _ => {
                         let _ = send(&tx, "ERROR:UNKNOWN");
                     }
