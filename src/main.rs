@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info};
+use local_ip_address::local_ip;
 
 // TODO: Allow random "player1" in demo mode
 // TODO: Support reconnecting behaviors
@@ -27,7 +28,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let addr = "0.0.0.0:8080";
     let listener = TcpListener::bind(&addr).await?;
-    info!("WebSocket server listening on: {}", addr);
+    let hosted_addr = if local_ip().is_ok() {
+        local_ip()?.to_string() + ":8080"
+    } else {
+        addr.to_string()
+    };
+    info!("WebSocket server listening on: {}", hosted_addr);
 
     let server_data = Arc::new(Server::new(admin_password.as_ref().clone(), demo_mode));
 
