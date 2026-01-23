@@ -155,7 +155,7 @@ impl Tournament for RoundRobin {
             // Send scores
             let clients_guard = server.clients.read().await;
             for (_, player_addr) in self.players.iter() {
-                let mut player = clients_guard.get(&player_addr.0).unwrap().write().await;
+                let player = clients_guard.get(&player_addr.0).unwrap().read().await;
                 let _ = send(&player.connection.clone(), "TOURNAMENT:END");
             }
         } else {

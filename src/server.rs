@@ -11,6 +11,7 @@ pub struct Server {
     pub admin_password: Arc<String>,
     pub tournament: WrappedTournament,
     pub waiting_timeout: Arc<RwLock<u64>>,
+    pub max_timeout: Arc<RwLock<u64>>,
     pub demo_mode: Arc<RwLock<bool>>,
 }
 
@@ -25,6 +26,7 @@ impl Server {
             admin_password: Arc::new(admin_password),
             tournament: Arc::new(RwLock::new(None)),
             waiting_timeout: Arc::new(RwLock::new(5000)),
+            max_timeout: Arc::new(RwLock::new(30000)),
             demo_mode: Arc::new(RwLock::new(demo_mode)),
         }
     }
@@ -125,7 +127,7 @@ impl Server {
         }
 
         if clients_guard.get(&addr).unwrap().read().await.ready {
-            return Err(anyhow::anyhow!("ERROR:INVALID"));
+            return Err(anyhow::anyhow!("ERROR:INVALID:READY"));
         }
 
         let mut client = clients_guard.get(&addr).unwrap().write().await;
@@ -263,8 +265,12 @@ impl Server {
                 self.matches.write().await.remove(&current_match_id).unwrap();
             }
             return Ok(());
-        } else {
-            current_match.place_token(client.color.clone(), column);
+        }
+
+        current_match.place_token(client.color.clone(), column);
+
+        if let Some(timeout_thread) = &current_match.timeout_thread {
+            timeout_thread.abort();
         }
 
         let mut viewer_messages = Vec::new();
@@ -357,19 +363,21 @@ impl Server {
         let demo_move = random_move(&current_match.board);
         let no_winner = winner == Color::None && !filled;
         let observers = self.observers.clone();
-
+        let opp_connection_move = opponent_connection.clone();
+        let client_tx = tx.clone();
         if current_match.demo_mode {
             current_match.ledger.push((!client.color, demo_move, Instant::now()));
             current_match.place_token(!client.color, demo_move);
         }
 
-        let opp_connection_move = opponent_connection.clone();
-
         current_match.wait_thread = Some(tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(adjusted_waiting as u64)).await;
 
             if !demo_mode && no_winner {
-                let _ = send(&opp_connection_move.as_ref().unwrap(), &format!("OPPONENT:{}", column));
+                let _ = send(
+                    &opp_connection_move.as_ref().unwrap(),
+                    &format!("OPPONENT:{}", column),
+                );
             }
 
             for msg in viewer_messages {
@@ -378,13 +386,67 @@ impl Server {
 
             if demo_mode && no_winner {
                 tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
-                let _ = send(&tx, &format!("OPPONENT:{}", demo_move));
+                let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
                 broadcast_message(
                     &observers,
                     &viewers,
                     &format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move),
                 )
                 .await;
+            }
+        }));
+
+        let max_timeout = *self.max_timeout.read().await;
+        let matches = self.matches.clone();
+        let tournament = self.tournament.clone();
+        let clients = self.clients.clone();
+        let match_id = current_match.id;
+        let ledger_size = current_match.ledger.len();
+        let client_username = client.username.clone();
+        let client_tx = tx.clone();
+        let client_addr = addr.clone();
+        let observers = self.observers.clone();
+        let viewers = current_match.viewers.clone();
+        current_match.timeout_thread = Some(tokio::spawn(async move {
+            if demo_mode {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(adjusted_waiting as u64)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(max_timeout as u64)).await;
+
+            let matches_guard = matches.read().await;
+            let the_match = matches_guard.get(&match_id);
+            if let Some(the_match) = the_match {
+                let the_match = the_match.read().await;
+                if the_match.ledger.len() == ledger_size {
+                    // forfeit the match
+                    let _ = send(&client_tx, "GAME:WINS");
+                    let _ = send(&opponent_connection.unwrap(), "GAME:LOSS");
+                    broadcast_message(
+                        &observers,
+                        &viewers,
+                        &format!("GAME:WIN:{}", client_username),
+                    )
+                    .await;
+
+                    let mut clients_guard = clients.write().await;
+                    let mut client = clients_guard.get_mut(&client_addr).unwrap().write().await;
+                    client.current_match = None;
+                    client.color = Color::None;
+                    drop(client);
+
+                    let mut opponent = clients_guard.get_mut(&opponent_addr).unwrap().write().await;
+                    opponent.current_match = None;
+                    opponent.color = Color::None;
+                    drop(opponent);
+
+                    let mut tournament_guard = tournament.write().await;
+                    let tourney = tournament_guard.as_mut().unwrap();
+                    tourney.write().await.inform_winnder(client_addr, false);
+                    drop(tournament_guard);
+
+                    matches.write().await.remove(&match_id).unwrap();
+                }
             }
         }));
 
@@ -650,6 +712,10 @@ impl Server {
                 let demo_mode = *self.demo_mode.read().await;
                 msg += demo_mode.to_string().as_str();
             }
+            "MAX_TIMEOUT" => {
+                let max_time = *self.max_timeout.read().await as f64 / 1000f64;
+                msg += max_time.to_string().as_str();
+            }
             &_ => return Err(anyhow::anyhow!("ERROR:INVALID:GET")),
         }
 
@@ -682,6 +748,13 @@ impl Server {
                     return Err(anyhow::anyhow!("ERROR:INVALID:SET"));
                 }
                 *self.waiting_timeout.write().await = (wait_time.unwrap() * 1000.0) as u64;
+            }
+            "MAX_TIMEOUT" => {
+                let max_time = data_value.parse::<f64>();
+                if max_time.is_err() {
+                    return Err(anyhow::anyhow!("ERROR:INVALID:SET"));
+                }
+                *self.max_timeout.write().await = (max_time.unwrap() * 1000.0) as u64;
             }
             &_ => return Err(anyhow::anyhow!("ERROR:INVALID:SET")),
         }
@@ -749,8 +822,12 @@ impl Server {
         }
         let the_match = the_match.unwrap().read().await;
 
-        if the_match.wait_thread.is_some() {
-            the_match.wait_thread.as_ref().unwrap().abort();
+        if let Some(wait_thread) = &the_match.wait_thread {
+            wait_thread.abort();
+        }
+
+        if let Some(timeout_thread) = &the_match.timeout_thread {
+            timeout_thread.abort();
         }
 
         self.broadcast_message(&the_match.viewers, "GAME:TERMINATED").await;

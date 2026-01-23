@@ -54,6 +54,7 @@ pub struct Match {
     pub viewers: Vec<SocketAddr>,
     pub ledger: Vec<(Color, usize, Instant)>,
     pub wait_thread: Option<tokio::task::JoinHandle<()>>,
+    pub timeout_thread: Option<tokio::task::JoinHandle<()>>,
     pub player1: SocketAddr,
     pub player2: SocketAddr,
 }
@@ -73,6 +74,7 @@ impl Match {
             viewers: Vec::new(),
             ledger: Vec::new(),
             wait_thread: None,
+            timeout_thread: None,
             player1: if player1 == first { player1 } else { player2 },
             player2: if player1 == first { player2 } else { player1 },
         }
