@@ -8,7 +8,6 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info};
 use local_ip_address::local_ip;
 
-// TODO: Allow random "player1" in demo mode
 // TODO: Support reconnecting behaviors
 // TODO: Other tournament types
 // TODO: Max move wait time
@@ -22,6 +21,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args: Vec<String> = env::args().collect();
     let demo_mode = args.get(1).is_some() && args.get(1).unwrap() == "demo";
+    if demo_mode {
+        info!("Starting server in DEMO MODE");
+    }
     let admin_password = env::var("ADMIN_AUTH").unwrap_or_else(|_| String::from("admin"));
     info!("Admin password: {}", admin_password);
     let admin_password = Arc::new(admin_password);

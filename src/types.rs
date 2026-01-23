@@ -1,5 +1,6 @@
 use rand::Rng;
 use std::net::SocketAddr;
+use std::time::Instant;
 use std::{ops, vec};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::Message;
@@ -55,8 +56,7 @@ pub struct Match {
     pub demo_mode: bool,
     pub board: Vec<Vec<Color>>,
     pub viewers: Vec<SocketAddr>,
-    pub ledger: Vec<(Color, usize)>,
-    pub move_to_dispatch: (Color, usize),
+    pub ledger: Vec<(Color, usize, Instant)>,
     pub wait_thread: Option<tokio::task::JoinHandle<()>>,
     pub player1: SocketAddr,
     pub player2: SocketAddr,
@@ -76,7 +76,6 @@ impl Match {
             board: vec![vec![Color::None; 6]; 7],
             viewers: Vec::new(),
             ledger: Vec::new(),
-            move_to_dispatch: (Color::None, 0),
             wait_thread: None,
             player1: if player1 == first { player1 } else { player2 },
             player2: if player1 == first { player2 } else { player1 },

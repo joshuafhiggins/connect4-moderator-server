@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::{tournaments::*, types::*, *};
 
 pub struct Server {
@@ -179,13 +181,17 @@ impl Server {
             current_match.player1
         };
 
-        let opponent_connection = if addr == current_match.player1 {
-            clients_guard.get(&current_match.player2).unwrap().read().await.connection.clone()
+        let opponent_connection = if current_match.demo_mode {
+            None
+        } else if addr == current_match.player1 {
+            Some(clients_guard.get(&current_match.player2).unwrap().read().await.connection.clone())
         } else {
-            clients_guard.get(&current_match.player1).unwrap().read().await.connection.clone()
+            Some(clients_guard.get(&current_match.player1).unwrap().read().await.connection.clone())
         };
 
-        let opponent_username = if addr == current_match.player1 {
+        let opponent_username = if current_match.demo_mode {
+            SERVER_PLAYER_USERNAME.to_string()
+        } else if addr == current_match.player1 {
             clients_guard.get(&current_match.player2).unwrap().read().await.username.clone()
         } else {
             clients_guard.get(&current_match.player1).unwrap().read().await.username.clone()
@@ -235,7 +241,7 @@ impl Server {
                 tx.send(Message::Close(None))?;
             } else {
                 let _ = send(&tx, "GAME:LOSS");
-                let _ = send(&opponent_connection, "GAME:WINS");
+                let _ = send(&opponent_connection.unwrap(), "GAME:WINS");
                 self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent_username)).await;
 
                 let mut clients_guard = self.clients.write().await;
@@ -254,49 +260,30 @@ impl Server {
             }
             return Ok(());
         } else {
-            // Place it
             current_match.place_token(client.color.clone(), column);
-            current_match.move_to_dispatch = (client.color.clone(), column);
         }
 
-        // broadcast the move to viewers
-        self.broadcast_message(
-            &current_match.viewers,
-            &format!("GAME:MOVE:{}:{}", client.username, column),
-        )
-        .await;
+        let mut viewer_messages = Vec::new();
+        let viewers = current_match.viewers.clone();
+
+        viewer_messages.push(format!("GAME:MOVE:{}:{}", client.username, column));
 
         // Check game end conditions
         let (winner, filled) = current_match.end_game_check();
 
-        if winner != Color::None {
-            if winner == client.color {
-                let _ = send(&tx, "GAME:WINS");
-                if !current_match.demo_mode {
-                    let _ = send(&opponent_connection, "GAME:LOSS");
-                }
-                self.broadcast_message(
-                    &current_match.viewers,
-                    &format!("GAME:WIN:{}", client.username),
-                )
-                .await;
-            } else {
-                let _ = send(&tx, "GAME:LOSS");
-                if !current_match.demo_mode {
-                    let _ = send(&opponent_connection, "GAME:WINS");
-                }
-                self.broadcast_message(
-                    &current_match.viewers,
-                    &format!("GAME:WIN:{}", opponent_username),
-                )
-                .await;
+        // Send match results
+        if winner == client.color {
+            let _ = send(&tx, "GAME:WINS");
+            if !current_match.demo_mode {
+                let _ = send(&opponent_connection.as_ref().unwrap(), "GAME:LOSS");
             }
+            viewer_messages.push(format!("GAME:WIN:{}", client.username));
         } else if filled {
             let _ = send(&tx, "GAME:DRAW");
             if !current_match.demo_mode {
-                let _ = send(&opponent_connection, "GAME:DRAW");
+                let _ = send(&opponent_connection.as_ref().unwrap(), "GAME:DRAW");
             }
-            self.broadcast_message(&current_match.viewers, "GAME:DRAW").await;
+            viewer_messages.push("GAME:DRAW".to_string());
         }
 
         // remove match from matchmaker
@@ -342,58 +329,64 @@ impl Server {
             } else if self.tournament.read().await.is_none() {
                 let _ = send(&tx, "TOURNAMENT:END");
                 if !is_demo_mode {
-                    let _ = send(&opponent_connection, "TOURNAMENT:END");
+                    let _ = send(&opponent_connection.unwrap(), "TOURNAMENT:END");
                 }
             }
 
             return Ok(());
         }
 
-        let connection_to_send = if !current_match.demo_mode {
-            opponent_connection.clone()
+        let default_waiting_time = *self.waiting_timeout.read().await;
+        let mut adjusted_waiting =
+            default_waiting_time as i64 + (rand::rng().random_range(0..=50) - 25);
+        let current_move_time = Instant::now();
+
+        if current_match.ledger.is_empty() {
+            adjusted_waiting = 0;
         } else {
-            tx.clone()
-        };
-        let column_to_use = if !current_match.demo_mode {
-            column
-        } else {
-            random_move(&current_match.board)
-        };
-        if current_match.demo_mode {
-            let move_to_dispatch = current_match.move_to_dispatch.clone();
-            current_match.ledger.push(move_to_dispatch);
-            current_match.move_to_dispatch = (!client.color, column_to_use);
-            current_match.place_token(!client.color, column_to_use);
+            let last_move_time = current_match.ledger.last().unwrap().2;
+            let elapsed = current_move_time.duration_since(last_move_time).as_millis() as i64;
+            adjusted_waiting -= elapsed;
+            if adjusted_waiting < 0 {
+                adjusted_waiting = 0;
+            }
         }
 
-        let waiting =
-            *self.waiting_timeout.read().await as i64 + (rand::rng().random_range(0..=50) - 25);
-        let matches_move = self.matches.clone();
-        let observers_move = self.observers.clone();
-        let match_id_move = current_match.id;
-        let demo_mode_move = current_match.demo_mode;
+        current_match.ledger.push((client.color.clone(), column, current_move_time));
+
+        let demo_mode = current_match.demo_mode;
+        let demo_move = random_move(&current_match.board);
+        let no_winner = winner == Color::None && !filled;
+        let observers = self.observers.clone();
+
+        if current_match.demo_mode {
+            current_match.ledger.push((!client.color, demo_move, Instant::now()));
+            current_match.place_token(!client.color, demo_move);
+        }
+
+        let opp_connection_move = opponent_connection.clone();
+
         current_match.wait_thread = Some(tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(waiting as u64)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(adjusted_waiting as u64)).await;
 
-            let mut matches_guard = matches_move.write().await;
-            let mut current_match = matches_guard.get_mut(&match_id_move).unwrap().write().await;
-            let move_to_dispatch = current_match.move_to_dispatch.clone();
-            current_match.ledger.push(move_to_dispatch);
-            current_match.move_to_dispatch = (Color::None, 0);
+            if !demo_mode && no_winner {
+                let _ = send(&opp_connection_move.as_ref().unwrap(), &format!("OPPONENT:{}", column));
+            }
 
-            if demo_mode_move {
+            for msg in viewer_messages {
+                broadcast_message(&observers, &viewers, &msg).await;
+            }
+
+            if demo_mode && no_winner {
+                tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
+                let _ = send(&tx, &format!("OPPONENT:{}", demo_move));
                 broadcast_message(
-                    &observers_move,
-                    &current_match.viewers,
-                    &format!("GAME:MOVE:{}:{}", "demo", column_to_use),
+                    &observers,
+                    &viewers,
+                    &format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move),
                 )
                 .await;
             }
-
-            drop(current_match);
-            drop(matches_guard);
-
-            let _ = send(&connection_to_send, &format!("OPPONENT:{}", column_to_use));
         }));
 
         Ok(())
@@ -436,17 +429,21 @@ impl Server {
         let mut to_send = "GAME:LIST:".to_string();
         for match_guard in matches_guard.values() {
             let a_match = match_guard.read().await;
-            let player1 = clients_guard.get(&a_match.player1).unwrap().read().await;
-            let player2 = clients_guard.get(&a_match.player2).unwrap().read().await;
+            let player1 = if a_match.player1.to_string() == SERVER_PLAYER_ADDR {
+                SERVER_PLAYER_USERNAME.to_string()
+            } else {
+                clients_guard.get(&a_match.player1).unwrap().read().await.username.clone()
+            };
+            let player2 = if a_match.player2.to_string() == SERVER_PLAYER_ADDR {
+                SERVER_PLAYER_USERNAME.to_string()
+            } else {
+                clients_guard.get(&a_match.player2).unwrap().read().await.username.clone()
+            };
             to_send += a_match.id.to_string().as_str();
             to_send += ",";
-            to_send += player1.username.as_str();
+            to_send += player1.as_str();
             to_send += ",";
-            to_send += if player1.username == player2.username {
-                "demo"
-            } else {
-                player2.username.as_str()
-            };
+            to_send += player2.as_str();
             to_send += "|";
         }
 
@@ -760,19 +757,19 @@ impl Server {
         self.broadcast_message(&the_match.viewers, "GAME:TERMINATED").await;
 
         let clients_guard = self.clients.read().await;
-		if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
-			let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
-			let _ = send(&player1.connection, "GAME:TERMINATED");
+        if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
+            let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
+            let _ = send(&player1.connection, "GAME:TERMINATED");
             player1.current_match = None;
             player1.color = Color::None;
-		}
+        }
 
         if the_match.player2 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
-			let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
-			let _ = send(&player2.connection, "GAME:TERMINATED");
+            let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
+            let _ = send(&player2.connection, "GAME:TERMINATED");
             player2.current_match = None;
             player2.color = Color::None;
-		}
+        }
         drop(clients_guard);
 
         drop(the_match);
