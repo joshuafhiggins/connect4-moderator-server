@@ -15,6 +15,7 @@ pub trait Tournament {
     async fn next(&mut self, server: &Server);
     async fn start(&mut self, server: &Server);
     async fn cancel(&mut self, server: &Server);
+    fn inform_winnder(&mut self, winner: SocketAddr, is_tie: bool);
     fn is_completed(&self) -> bool;
     fn get_type(&self) -> String;
 }

@@ -253,8 +253,12 @@ impl Server {
                 let mut opponent = clients_guard.get_mut(&opponent_addr).unwrap().write().await;
                 opponent.current_match = None;
                 opponent.color = Color::None;
-                opponent.score += 1;
                 drop(opponent);
+
+                let mut tournament_guard = self.tournament.write().await;
+                let tourney = tournament_guard.as_mut().unwrap();
+                tourney.write().await.inform_winnder(opponent_addr, false);
+                drop(tournament_guard);
 
                 self.matches.write().await.remove(&current_match_id).unwrap();
             }
@@ -297,18 +301,12 @@ impl Server {
 
             let clients_guard = self.clients.read().await;
             let mut client = clients_guard.get(&addr).unwrap().write().await;
-            if client.color == winner {
-                client.score += 1;
-            }
             client.current_match = None;
             client.color = Color::None;
             drop(client);
 
             if !is_demo_mode {
                 let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
-                if opponent.color == winner {
-                    opponent.score += 1;
-                }
                 opponent.current_match = None;
                 opponent.color = Color::None;
                 drop(opponent);
@@ -322,6 +320,7 @@ impl Server {
 
                 let mut tournament_guard = self.tournament.write().await;
                 let tourney = tournament_guard.as_mut().unwrap();
+                tourney.write().await.inform_winnder(addr, filled);
                 tourney.write().await.next(&self).await;
                 if tourney.read().await.is_completed() {
                     *tournament_guard = None;

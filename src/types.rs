@@ -31,8 +31,6 @@ pub struct Client {
     pub ready: bool,
     pub color: Color,
     pub current_match: Option<u32>,
-    pub round_robin_id: u32,
-    pub score: u32,
     pub addr: SocketAddr,
 }
 
@@ -44,8 +42,6 @@ impl Client {
             ready: false,
             color: Color::None,
             current_match: None,
-            round_robin_id: 0,
-            score: 0,
             addr,
         }
     }

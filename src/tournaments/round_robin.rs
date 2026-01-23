@@ -4,11 +4,14 @@ use async_trait::async_trait;
 
 use crate::{server::Server, *};
 
+type Score = u32;
+type ID = u32;
+
 #[derive(Clone)]
 pub struct RoundRobin {
-    pub players: HashMap<u32, SocketAddr>,
-    pub top_half: Vec<u32>,
-    pub bottom_half: Vec<u32>,
+    pub players: HashMap<ID, (SocketAddr, Score)>,
+    pub top_half: Vec<ID>,
+    pub bottom_half: Vec<ID>,
     pub is_completed: bool,
 }
 
@@ -27,18 +30,18 @@ impl RoundRobin {
             let match_id: u32 = gen_match_id(matches).await;
             let new_match = Arc::new(RwLock::new(Match::new(
                 match_id,
-                *player1_addr,
-                *player2_addr,
+                player1_addr.0,
+                player2_addr.0,
                 false,
             )));
 
             let match_guard = new_match.read().await;
-            let mut player1 = clients_guard.get(player1_addr).unwrap().write().await;
+            let mut player1 = clients_guard.get(&player1_addr.0).unwrap().write().await;
 
             player1.current_match = Some(match_id);
             player1.ready = false;
 
-            if match_guard.player1 == *player1_addr {
+            if match_guard.player1 == player1_addr.0 {
                 player1.color = Color::Red;
                 let _ = send(&player1.connection, "GAME:START:1");
             } else {
@@ -48,12 +51,12 @@ impl RoundRobin {
 
             drop(player1);
 
-            let mut player2 = clients_guard.get(player2_addr).unwrap().write().await;
+            let mut player2 = clients_guard.get(&player2_addr.0).unwrap().write().await;
 
             player2.current_match = Some(match_id);
             player2.ready = false;
 
-            if match_guard.player1 == *player2_addr {
+            if match_guard.player1 == player2_addr.0 {
                 player2.color = Color::Red;
                 let _ = send(&player2.connection, "GAME:START:1");
             } else {
@@ -81,7 +84,7 @@ impl Tournament for RoundRobin {
         let size = ready_players.len();
 
         for (id, player) in ready_players.iter().enumerate() {
-            result.players.insert(id as u32, *player);
+            result.players.insert(id as u32, (*player, 0));
         }
 
         for i in 0..size / 2 {
@@ -93,6 +96,19 @@ impl Tournament for RoundRobin {
         }
 
         result
+    }
+
+    fn inform_winnder(&mut self, winner: SocketAddr, is_tie: bool) {
+        if is_tie {
+            return;
+        }
+
+        for (_, player_addr) in self.players.iter_mut() {
+            if player_addr.0 == winner {
+                player_addr.1 += 1;
+                break;
+            }
+        }
     }
 
     async fn next(&mut self, server: &Server) {
@@ -119,9 +135,9 @@ impl Tournament for RoundRobin {
         let clients_guard = server.clients.read().await;
         let mut player_scores: Vec<(String, u32)> = Vec::new();
         for (_, player_addr) in self.players.iter() {
-            let player = clients_guard.get(player_addr).unwrap().read().await;
+            let player = clients_guard.get(&player_addr.0).unwrap().read().await;
             let _ = send(&player.connection.clone(), "TOURNAMENT:END");
-            player_scores.push((player.username.clone(), player.score));
+            player_scores.push((player.username.clone(), player_addr.1));
         }
         drop(clients_guard);
 
@@ -139,10 +155,8 @@ impl Tournament for RoundRobin {
             // Send scores
             let clients_guard = server.clients.read().await;
             for (_, player_addr) in self.players.iter() {
-                let mut player = clients_guard.get(player_addr).unwrap().write().await;
+                let mut player = clients_guard.get(&player_addr.0).unwrap().write().await;
                 let _ = send(&player.connection.clone(), "TOURNAMENT:END");
-                player.score = 0;
-                player.round_robin_id = 0;
             }
         } else {
             // Create next matches
@@ -158,7 +172,7 @@ impl Tournament for RoundRobin {
         for (_, addr) in self.players.iter() {
             let clients_guard = server.clients.read().await;
 
-            let client = clients_guard.get(addr);
+            let client = clients_guard.get(&addr.0);
             if client.is_none() {
                 continue;
             }
