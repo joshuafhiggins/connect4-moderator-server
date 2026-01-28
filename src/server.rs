@@ -7,6 +7,7 @@ pub struct Server {
     pub usernames: Usernames,
     pub observers: Observers,
     pub matches: Matches,
+    pub reservations: Reservations,
     pub admin: Arc<RwLock<Option<SocketAddr>>>,
     pub admin_password: Arc<String>,
     pub tournament: WrappedTournament,
@@ -22,6 +23,7 @@ impl Server {
             usernames: Arc::new(RwLock::new(HashMap::new())),
             observers: Arc::new(RwLock::new(HashMap::new())),
             matches: Arc::new(RwLock::new(HashMap::new())),
+            reservations: Arc::new(RwLock::new(Vec::new())),
             admin: Arc::new(RwLock::new(None)),
             admin_password: Arc::new(admin_password),
             tournament: Arc::new(RwLock::new(None)),
@@ -31,7 +33,6 @@ impl Server {
         }
     }
 
-    // Handler for CONNECT:<username>
     pub async fn handle_connect_cmd(
         &self,
         addr: SocketAddr,
@@ -115,7 +116,6 @@ impl Server {
         Ok(())
     }
 
-    // Handler for READY
     pub async fn handle_ready(
         &self,
         addr: SocketAddr,
@@ -131,9 +131,47 @@ impl Server {
         }
 
         let mut client = clients_guard.get(&addr).unwrap().write().await;
+        let client_username = client.username.clone();
         client.ready = true;
         let _ = send(&tx, "READY:ACK");
+        drop(client);
+        drop(clients_guard);
 
+        if let Some(opponent_addr) = self.find_reservation_opponent(client_username).await {
+            let clients_guard = self.clients.read().await;
+            let mut client = clients_guard.get(&addr).unwrap().write().await;
+            let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
+
+            let match_id: u32 = gen_match_id(&self.matches).await;
+            let new_match = Arc::new(RwLock::new(Match::new(
+                match_id,
+                addr,
+                opponent_addr,
+                false,
+            )));
+            self.matches.write().await.insert(match_id, new_match.clone());
+
+            client.ready = false;
+            client.current_match = Some(match_id);
+            client.color = if new_match.read().await.player1 == addr {
+                let _ = send(&tx, "GAME:START:1");
+                let _ = send(&opponent.connection, "GAME:START:0");
+                Color::Red
+            } else {
+                let _ = send(&tx, "GAME:START:0");
+                let _ = send(&opponent.connection, "GAME:START:1");
+                Color::Yellow
+            };
+
+            opponent.ready = false;
+            opponent.current_match = Some(match_id);
+            opponent.color = !client.color;
+
+            return Ok(());
+        }
+
+        let clients_guard = self.clients.read().await;
+        let mut client = clients_guard.get(&addr).unwrap().write().await;
         let is_demo_mode = self.demo_mode.read().await.clone();
         if is_demo_mode {
             let match_id: u32 = gen_match_id(&self.matches).await;
@@ -158,7 +196,6 @@ impl Server {
         Ok(())
     }
 
-    // Handler for PLAY (column already parsed)
     pub async fn handle_play(
         &self,
         addr: SocketAddr,
@@ -259,7 +296,7 @@ impl Server {
 
                 let mut tournament_guard = self.tournament.write().await;
                 let tourney = tournament_guard.as_mut().unwrap();
-                tourney.write().await.inform_winnder(opponent_addr, false);
+                tourney.write().await.inform_winner(opponent_addr, false);
                 drop(tournament_guard);
 
                 self.matches.write().await.remove(&current_match_id).unwrap();
@@ -326,7 +363,7 @@ impl Server {
 
                 let mut tournament_guard = self.tournament.write().await;
                 let tourney = tournament_guard.as_mut().unwrap();
-                tourney.write().await.inform_winnder(addr, filled);
+                tourney.write().await.inform_winner(addr, filled);
                 tourney.write().await.next(&self).await;
                 if tourney.read().await.is_completed() {
                     *tournament_guard = None;
@@ -442,7 +479,7 @@ impl Server {
 
                     let mut tournament_guard = tournament.write().await;
                     let tourney = tournament_guard.as_mut().unwrap();
-                    tourney.write().await.inform_winnder(client_addr, false);
+                    tourney.write().await.inform_winner(client_addr, false);
                     drop(tournament_guard);
 
                     matches.write().await.remove(&match_id).unwrap();
@@ -763,6 +800,112 @@ impl Server {
         Ok(())
     }
 
+    pub async fn handle_reservation_add(
+        &self,
+        tx: UnboundedSender<Message>,
+        addr: SocketAddr,
+        player1_username: String,
+        player2_username: String,
+    ) -> Result<(), anyhow::Error> {
+        if !self.auth_check(addr).await {
+            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+        }
+
+        self.reservations.write().await.push((player1_username.clone(), player2_username.clone()));
+
+        let _ = send(
+            &tx,
+            &format!("RESERVATION:ADD:{},{}", player1_username, player2_username),
+        );
+
+        let player1_addr = self.usernames.read().await.get(&player1_username).cloned();
+        let player2_addr = self.usernames.read().await.get(&player2_username).cloned();
+
+        let clients_guard = self.clients.read().await;
+        if player1_addr.is_some() && player2_addr.is_some() {
+            let mut player1 = clients_guard.get(&player1_addr.unwrap()).unwrap().write().await;
+            let mut player2 = clients_guard.get(&player2_addr.unwrap()).unwrap().write().await;
+
+            if player1.ready && player2.ready {
+                let match_id: u32 = gen_match_id(&self.matches).await;
+                let new_match = Arc::new(RwLock::new(Match::new(
+                    match_id,
+                    player1_addr.unwrap(),
+                    player2_addr.unwrap(),
+                    false,
+                )));
+                self.matches.write().await.insert(match_id, new_match.clone());
+
+                player1.ready = false;
+                player1.current_match = Some(match_id);
+                player1.color = if new_match.read().await.player1 == player1_addr.unwrap() {
+                    let _ = send(&tx, "GAME:START:1");
+                    let _ = send(&player2.connection, "GAME:START:0");
+                    Color::Red
+                } else {
+                    let _ = send(&tx, "GAME:START:0");
+                    let _ = send(&player2.connection, "GAME:START:1");
+                    Color::Yellow
+                };
+
+                player2.ready = false;
+                player2.current_match = Some(match_id);
+                player2.color = !player1.color;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_reservation_delete(
+        &self,
+        tx: UnboundedSender<Message>,
+        addr: SocketAddr,
+        player1_username: String,
+        player2_username: String,
+    ) -> Result<(), anyhow::Error> {
+        if !self.auth_check(addr).await {
+            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+        }
+
+        self.reservations
+            .write()
+            .await
+            .retain(|(p1, p2)| !(p1 == &player1_username && p2 == &player2_username));
+
+        let _ = send(
+            &tx,
+            &format!(
+                "RESERVATION:DELETE:{},{}",
+                player1_username, player2_username
+            ),
+        );
+
+        Ok(())
+    }
+
+    pub async fn handle_reservation_get(
+        &self,
+        tx: UnboundedSender<Message>,
+        addr: SocketAddr,
+    ) -> Result<(), anyhow::Error> {
+        if !self.auth_check(addr).await {
+            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+        }
+
+        let reservations_guard = self.reservations.read().await;
+        let mut msg = "RESERVATION:LIST:".to_string();
+        for (p1, p2) in reservations_guard.iter() {
+            msg += &format!("{},{}|", p1, p2);
+        }
+        if msg.ends_with("|") {
+            msg.pop();
+        }
+
+        let _ = send(&tx, &msg);
+        Ok(())
+    }
+
     pub async fn watch(&self, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
         let matches_guard = self.matches.read().await;
 
@@ -877,5 +1020,29 @@ impl Server {
             return false;
         }
         true
+    }
+
+    pub async fn find_reservation_opponent(&self, username: String) -> Option<SocketAddr> {
+        let reservations_guard = self.reservations.read().await;
+        for (player1, player2) in reservations_guard.iter() {
+            if player1 == &username || player2 == &username {
+                let opponent_username = if player1 == &username {
+                    player2
+                } else {
+                    player1
+                };
+
+                let usernames_guard = self.usernames.read().await;
+                if let Some(opponent_addr) = usernames_guard.get(opponent_username) {
+                    let clients_guard = self.clients.read().await;
+                    let opponent = clients_guard.get(opponent_addr).unwrap().read().await;
+                    if opponent.ready {
+                        return Some(*opponent_addr);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }

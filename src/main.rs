@@ -1,12 +1,12 @@
 use connect4_moderator_server::{server::Server, *};
 use futures_util::{SinkExt, StreamExt};
+use local_ip_address::local_ip;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info};
-use local_ip_address::local_ip;
 
 // TODO: Support reconnecting behaviors
 // TODO: Other tournament types
@@ -225,6 +225,46 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:SET");
                         }
                     }
+                    "RESERVATION" => {
+                        if parts.get(1) == Some(&"ADD") && parts.len() == 3 {
+                            let usernames = parts[2].split(",").collect::<Vec<&str>>();
+                            if usernames.len() != 2 {
+                                error!("handle_reservation_add: invalid number of usernames");
+                                let _ = send(&tx, "ERROR:INVALID:RESERVATION");
+                                continue;
+                            }
+
+                            let player1_username = usernames[0].to_string();
+                            let player2_username = usernames[1].to_string();
+
+                            if let Err(e) = sd.handle_reservation_add(tx.clone(), addr, player1_username, player2_username).await {
+                                error!("handle_reservation_add: {}", e);
+                                let _ = send(&tx, e.to_string().as_str());
+                            }
+                        } else if parts.get(1) == Some(&"DELETE") && parts.len() == 3 {
+                            let usernames = parts[2].split(",").collect::<Vec<&str>>();
+                            if usernames.len() != 2 {
+                                error!("handle_reservation_delete: invalid number of usernames");
+                                let _ = send(&tx, "ERROR:INVALID:RESERVATION");
+                                continue;
+                            }
+
+                            let player1_username = usernames[0].to_string();
+                            let player2_username = usernames[1].to_string();
+
+                            if let Err(e) = sd.handle_reservation_delete(tx.clone(), addr, player1_username, player2_username).await {
+                                error!("handle_reservation_delete: {}", e);
+                                let _ = send(&tx, e.to_string().as_str());
+                            }
+                        } else if parts.get(1) == Some(&"GET") {
+                            if let Err(e) = sd.handle_reservation_get(tx.clone(), addr).await {
+                                error!("handle_reservation_get: {}", e);
+                                let _ = send(&tx, e.to_string().as_str());
+                            }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:RESERVATION");
+                        }
+                    }
                     _ => {
                         let _ = send(&tx, "ERROR:UNKNOWN");
                     }
@@ -256,6 +296,7 @@ async fn handle_connection(
         let username = client.username.clone();
         if let Some(match_id) = client.current_match {
             drop(client);
+            // TOOD: do a Technical Timeout instead
             sd.terminate_match(match_id).await;
         } else {
             drop(client);

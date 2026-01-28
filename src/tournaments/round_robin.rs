@@ -98,7 +98,7 @@ impl Tournament for RoundRobin {
         result
     }
 
-    fn inform_winnder(&mut self, winner: SocketAddr, is_tie: bool) {
+    fn inform_winner(&mut self, winner: SocketAddr, is_tie: bool) {
         if is_tie {
             return;
         }

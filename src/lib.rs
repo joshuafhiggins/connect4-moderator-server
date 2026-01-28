@@ -21,6 +21,7 @@ pub type Clients = Arc<RwLock<HashMap<SocketAddr, Arc<RwLock<Client>>>>>;
 pub type Usernames = Arc<RwLock<HashMap<String, SocketAddr>>>;
 pub type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
 pub type Matches = Arc<RwLock<HashMap<u32, Arc<RwLock<Match>>>>>;
+pub type Reservations = Arc<RwLock<Vec<(String, String)>>>;
 pub type WrappedTournament = Arc<RwLock<Option<Arc<RwLock<dyn Tournament + Send + Sync>>>>>;
 
 pub const SERVER_PLAYER_USERNAME: &str = "The Server";
