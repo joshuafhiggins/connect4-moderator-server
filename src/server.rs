@@ -167,6 +167,11 @@ impl Server {
             opponent.current_match = Some(match_id);
             opponent.color = !client.color;
 
+            self.reservations
+                .write()
+                .await
+                .retain(|(p1, p2)| !(p1 == &client.username && p2 == &opponent.username));
+
             return Ok(());
         }
 
@@ -703,6 +708,9 @@ impl Server {
         let mut tournament_guard = self.tournament.write().await;
         *tournament_guard = Some(Arc::new(RwLock::new(tourney)));
 
+        // Clear any pending reservations when a tournament starts
+        self.reservations.write().await.clear();
+
         self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type))
             .await;
         Ok(())
@@ -851,6 +859,11 @@ impl Server {
                 player2.ready = false;
                 player2.current_match = Some(match_id);
                 player2.color = !player1.color;
+
+                self.reservations
+                    .write()
+                    .await
+                    .retain(|(p1, p2)| !(p1 == &player1_username && p2 == &player2_username));
             }
         }
 
