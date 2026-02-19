@@ -84,6 +84,19 @@ async fn handle_connection(
                             let _ = send(&tx, "ERROR:INVALID:ID:");
                         }
                     }
+                    "RECONNECT" => {
+                        if parts.len() > 1 {
+                            let requested_username = parts[1].to_string();
+                            if let Err(e) =
+                                sd.handle_reconnect_cmd(addr, tx.clone(), requested_username).await
+                            {
+                                error!("handle_reconnect: {}", e);
+                                let _ = send(&tx, e.to_string().as_str());
+                            }
+                        } else {
+                            let _ = send(&tx, "ERROR:INVALID:RECONNECT:");
+                        }
+                    }
                     "DISCONNECT" => {
                         if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
                             error!("handle_disconnect: {}", e);
@@ -288,14 +301,17 @@ async fn handle_connection(
     if clients_guard.get(&addr).is_some() {
         let client = clients_guard.get(&addr).unwrap().read().await;
         let username = client.username.clone();
-        if let Some(match_id) = client.current_match {
-            drop(client);
-            // TOOD: do a Technical Timeout instead
-            sd.terminate_match(match_id).await;
-        } else {
-            drop(client);
+        let tournament_guard = sd.tournament.read().await;
+        if client.current_match.is_some() {
+            sd.disconnected_clients.write().await.push(username.clone());
+        } else if tournament_guard.is_some() {
+            let tourney = tournament_guard.clone().unwrap();
+            if tourney.read().await.contains_player(addr) {
+                sd.disconnected_clients.write().await.push(username.clone());
+            }
         }
 
+        drop(client);
         drop(clients_guard);
 
         sd.clients.write().await.remove(&addr);

@@ -11,6 +11,7 @@ In order to run your AI, you'll need:
 - Python 3
 - `pip install websockets` (Windows) or `pip3 install websockets` (Linux/macOS)
 - `pip install pip-system-certs` (Windows) or `pip3 install pip-system-certs` (Linux/macOS)
+- `pip install wakepy` (Windows) or `pip3 install wakepy` (Linux/macOS)
 
 To run the example, run `python gameloop.py` (Windows) or `python3 gameloop.py` (Linux/macOS).
 

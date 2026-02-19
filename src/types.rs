@@ -24,6 +24,16 @@ impl ops::Not for Color {
     }
 }
 
+impl From<Color> for bool {
+    fn from(color: Color) -> bool {
+        match color {
+            Color::Red => true,
+            Color::Yellow => false,
+            Color::None => panic!("Cannot convert Color::None to bool"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Client {
     pub username: String,

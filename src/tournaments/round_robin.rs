@@ -111,6 +111,24 @@ impl Tournament for RoundRobin {
         }
     }
 
+    fn inform_reconnect(&mut self, old_addr: SocketAddr, new_addr: SocketAddr) {
+        for (_, (player_addr, _)) in self.players.iter_mut() {
+            if *player_addr == old_addr {
+                *player_addr = new_addr;
+                break;
+            }
+        }
+    }
+
+    fn contains_player(&self, addr: SocketAddr) -> bool {
+        for (_, (player_addr, _)) in self.players.iter() {
+            if *player_addr == addr {
+                return true;
+            }
+        }
+        false
+    }
+
     async fn next(&mut self, server: &Server) {
         if self.is_completed {
             return;

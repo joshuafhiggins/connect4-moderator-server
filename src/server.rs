@@ -4,6 +4,7 @@ use crate::{tournaments::*, types::*, *};
 
 pub struct Server {
     pub clients: Clients,
+    pub disconnected_clients: Arc<RwLock<Vec<String>>>,
     pub usernames: Usernames,
     pub observers: Observers,
     pub matches: Matches,
@@ -20,6 +21,7 @@ impl Server {
     pub fn new(admin_password: String, demo_mode: bool) -> Server {
         Server {
             clients: Arc::new(RwLock::new(HashMap::new())),
+            disconnected_clients: Arc::new(RwLock::new(Vec::new())),
             usernames: Arc::new(RwLock::new(HashMap::new())),
             observers: Arc::new(RwLock::new(HashMap::new())),
             matches: Arc::new(RwLock::new(HashMap::new())),
@@ -53,9 +55,21 @@ impl Server {
             )));
         }
 
+        let mut reconnecting = false;
+        let disconnected_guard = self.disconnected_clients.read().await;
+        if disconnected_guard.contains(&requested_username) {
+            reconnecting = true;
+        }
+
         let clients_guard = self.clients.read().await;
+        let mut reconnecting_client = None;
         for client in clients_guard.values() {
             if requested_username == client.read().await.username {
+                if reconnecting {
+                    reconnecting_client = Some(client.clone());
+                    break;
+                }
+
                 return Err(anyhow::anyhow!(format!(
                     "ERROR:INVALID:ID:{}",
                     requested_username
@@ -66,20 +80,141 @@ impl Server {
         drop(clients_guard);
 
         self.remove_observer_from_all_matches(addr).await;
-
-        // not taken
         self.observers.write().await.remove(&addr);
         self.usernames.write().await.insert(requested_username.clone(), addr);
-        self.clients.write().await.insert(
-            addr.to_string().parse()?,
-            Arc::new(RwLock::new(Client::new(
-                requested_username,
-                tx.clone(),
-                addr.to_string().parse()?,
-            ))),
-        );
-
         let _ = send(&tx, "CONNECT:ACK");
+
+        if !reconnecting {
+            self.clients.write().await.insert(
+                addr.to_string().parse()?,
+                Arc::new(RwLock::new(Client::new(
+                    requested_username,
+                    tx.clone(),
+                    addr.to_string().parse()?,
+                ))),
+            );
+
+            return Ok(());
+        }
+
+        // reconnecting
+        self.disconnected_clients.write().await.retain(|name| name != &requested_username);
+        let client_guard = reconnecting_client.unwrap();
+        let mut client = client_guard.write().await;
+        let old_addr = client.addr;
+        client.addr = addr;
+        client.connection = tx.clone();
+        // I don't think this will fail
+        let match_id = client.current_match.unwrap();
+        let client_color = client.color;
+
+        drop(client);
+
+        let mut clients_guard = self.clients.write().await;
+        clients_guard.remove(&old_addr);
+        clients_guard.insert(addr, client_guard.clone());
+        drop(clients_guard);
+
+        let tournament_guard = self.tournament.read().await;
+        if tournament_guard.is_some() {
+            let tourney = tournament_guard.clone().unwrap();
+            tourney.write().await.inform_reconnect(old_addr, addr);
+        }
+        drop(tournament_guard);
+
+        let matches_guard = self.matches.read().await;
+        let mut the_match = matches_guard.get(&match_id).unwrap().write().await;
+        if the_match.demo_mode {
+            drop(the_match);
+            drop(matches_guard);
+            self.terminate_match(match_id).await;
+            return Ok(());
+        } else {
+            the_match.ledger.clear();
+            the_match.board = vec![vec![Color::None; 6]; 7];
+            let opponent_addr = if the_match.player1 == addr {
+                the_match.player2
+            } else {
+                the_match.player1
+            };
+
+            if the_match.wait_thread.is_some() {
+                the_match.wait_thread.as_ref().unwrap().abort();
+            }
+
+            if the_match.timeout_thread.is_some() {
+                the_match.timeout_thread.as_ref().unwrap().abort();
+            }
+
+            let clients_guard = self.clients.read().await;
+            let opponent = clients_guard.get(&opponent_addr).unwrap().read().await;
+            let _ = send(&opponent.connection, "GAME:TERMINATED");
+            let _ = send(
+                &tx,
+                &format!("GAME:START:{}", bool::from(client_color) as u8),
+            );
+            let _ = send(
+                &opponent.connection,
+                &format!("GAME:START:{}", bool::from(opponent.color) as u8),
+            );
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_reconnect_cmd(
+        &self,
+        addr: SocketAddr,
+        tx: UnboundedSender<Message>,
+        requested_username: String,
+    ) -> Result<(), anyhow::Error> {
+        let clients_guard = self.clients.read().await;
+        let disconnected_guard = self.disconnected_clients.read().await;
+        let mut found_client = None;
+
+        for client in clients_guard.values() {
+            if requested_username == client.read().await.username {
+                if disconnected_guard.contains(&requested_username) {
+                    found_client = Some(client.clone());
+                }
+                break;
+            }
+        }
+
+        drop(clients_guard);
+        drop(disconnected_guard);
+
+        if let Some(client_guard) = found_client {
+            self.disconnected_clients.write().await.retain(|name| name != &requested_username);
+            let mut client = client_guard.write().await;
+            let old_addr = client.addr;
+            client.addr = addr;
+            client.connection = tx.clone();
+
+            let mut clients_guard = self.clients.write().await;
+            clients_guard.remove(&old_addr);
+            clients_guard.insert(addr, client_guard.clone());
+            drop(clients_guard);
+
+            let _ = send(&tx, "RECONNECT:ACK");
+
+            let matches_guard = self.matches.read().await;
+            let the_match = matches_guard.get(&client.current_match.unwrap()).unwrap().read().await;
+
+            let last = the_match.ledger.last();
+            if last.is_some() && last.unwrap().0 != client.color {
+                let _ = send(
+                    &tx,
+                    &format!("OPPONENT:{}", the_match.ledger.last().unwrap().1),
+                );
+            }
+        } else {
+            return Err(anyhow::anyhow!(format!(
+                "ERROR:INVALID:RECONNECT:{}",
+                requested_username
+            )));
+        }
+
         Ok(())
     }
 
@@ -219,26 +354,20 @@ impl Server {
         let matches_guard = self.matches.read().await;
         let current_match = matches_guard.get(&client.current_match.unwrap()).unwrap().read().await;
 
-        let opponent_addr = if addr == current_match.player1 {
-            current_match.player2
-        } else {
-            current_match.player1
-        };
+        let opponent = {
+            let mut result = None;
 
-        let opponent_connection = if current_match.demo_mode {
-            None
-        } else if addr == current_match.player1 {
-            Some(clients_guard.get(&current_match.player2).unwrap().read().await.connection.clone())
-        } else {
-            Some(clients_guard.get(&current_match.player1).unwrap().read().await.connection.clone())
-        };
+            if !current_match.demo_mode {
+                let opponent_addr = if addr == current_match.player1 {
+                    current_match.player2
+                } else {
+                    current_match.player1
+                };
 
-        let opponent_username = if current_match.demo_mode {
-            SERVER_PLAYER_USERNAME.to_string()
-        } else if addr == current_match.player1 {
-            clients_guard.get(&current_match.player2).unwrap().read().await.username.clone()
-        } else {
-            clients_guard.get(&current_match.player1).unwrap().read().await.username.clone()
+                result = Some(clients_guard.get(&opponent_addr).cloned().unwrap());
+            }
+
+            result
         };
 
         // Check if it's their move
@@ -284,20 +413,23 @@ impl Server {
                 self.terminate_match(current_match_id).await;
                 tx.send(Message::Close(None))?;
             } else {
+                let opponent = opponent.unwrap();
+                let mut opponent = opponent.write().await;
+
                 let _ = send(&tx, "GAME:LOSS");
-                let _ = send(&opponent_connection.unwrap(), "GAME:WINS");
-                self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent_username)).await;
+                let _ = send(&opponent.connection, "GAME:WINS");
+                self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent.username)).await;
+
+                opponent.current_match = None;
+                opponent.color = Color::None;
+                let opponent_addr = opponent.addr;
+                drop(opponent);
 
                 let mut clients_guard = self.clients.write().await;
                 let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
                 client.current_match = None;
                 client.color = Color::None;
                 drop(client);
-
-                let mut opponent = clients_guard.get_mut(&opponent_addr).unwrap().write().await;
-                opponent.current_match = None;
-                opponent.color = Color::None;
-                drop(opponent);
 
                 let mut tournament_guard = self.tournament.write().await;
                 let tourney = tournament_guard.as_mut().unwrap();
@@ -327,13 +459,17 @@ impl Server {
         if winner == client.color {
             let _ = send(&tx, "GAME:WINS");
             if !current_match.demo_mode {
-                let _ = send(&opponent_connection.as_ref().unwrap(), "GAME:LOSS");
+                let opponent = opponent.clone().unwrap();
+                let opponent = opponent.read().await;
+                let _ = send(&opponent.connection, "GAME:LOSS");
             }
             viewer_messages.push(format!("GAME:WIN:{}", client.username));
         } else if filled {
             let _ = send(&tx, "GAME:DRAW");
             if !current_match.demo_mode {
-                let _ = send(&opponent_connection.as_ref().unwrap(), "GAME:DRAW");
+                let opponent = opponent.clone().unwrap();
+                let opponent = opponent.read().await;
+                let _ = send(&opponent.connection, "GAME:DRAW");
             }
             viewer_messages.push("GAME:DRAW".to_string());
         }
@@ -354,7 +490,8 @@ impl Server {
             drop(client);
 
             if !is_demo_mode {
-                let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
+                let opponent = opponent.clone().unwrap();
+                let mut opponent = opponent.write().await;
                 opponent.current_match = None;
                 opponent.color = Color::None;
                 drop(opponent);
@@ -376,7 +513,9 @@ impl Server {
             } else if self.tournament.read().await.is_none() {
                 let _ = send(&tx, "TOURNAMENT:END");
                 if !is_demo_mode {
-                    let _ = send(&opponent_connection.unwrap(), "TOURNAMENT:END");
+                    let opponent = opponent.clone().unwrap();
+                    let opponent = opponent.read().await;
+                    let _ = send(&opponent.connection, "TOURNAMENT:END");
                 }
             }
 
@@ -405,7 +544,7 @@ impl Server {
         let demo_move = random_move(&current_match.board);
         let no_winner = winner == Color::None && !filled;
         let observers = self.observers.clone();
-        let opp_connection_move = opponent_connection.clone();
+        let opponent_move = opponent.clone();
         let client_tx = tx.clone();
         if current_match.demo_mode {
             current_match.ledger.push((!client.color, demo_move, Instant::now()));
@@ -416,8 +555,10 @@ impl Server {
             tokio::time::sleep(tokio::time::Duration::from_millis(adjusted_waiting as u64)).await;
 
             if !demo_mode && no_winner {
+                let opponent = opponent_move.unwrap();
+                let opponent = opponent.read().await;
                 let _ = send(
-                    &opp_connection_move.as_ref().unwrap(),
+                    &opponent.connection.clone(),
                     &format!("OPPONENT:{}", column),
                 );
             }
@@ -449,6 +590,7 @@ impl Server {
         let client_addr = addr.clone();
         let observers = self.observers.clone();
         let viewers = current_match.viewers.clone();
+        let opponent_move = opponent.clone();
         current_match.timeout_thread = Some(tokio::spawn(async move {
             if demo_mode {
                 return;
@@ -463,7 +605,10 @@ impl Server {
                 if the_match.ledger.len() == ledger_size {
                     // forfeit the match
                     let _ = send(&client_tx, "GAME:WINS");
-                    let _ = send(&opponent_connection.unwrap(), "GAME:LOSS");
+                    let opponent = opponent_move.clone().unwrap();
+                    let opponent = opponent.read().await;
+                    let _ = send(&opponent.connection, "GAME:LOSS");
+                    drop(opponent);
                     broadcast_message(
                         &observers,
                         &viewers,
@@ -477,7 +622,8 @@ impl Server {
                     client.color = Color::None;
                     drop(client);
 
-                    let mut opponent = clients_guard.get_mut(&opponent_addr).unwrap().write().await;
+                    let opponent = opponent_move.unwrap();
+                    let mut opponent = opponent.write().await;
                     opponent.current_match = None;
                     opponent.color = Color::None;
                     drop(opponent);
