@@ -8,12 +8,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info};
 
-// TODO: Support reconnecting behaviors
-// TODO: Other tournament types
-// TODO: Max move wait time
-// TODO: Tiebreakers, guarantee some amount of going first
-// TODO: Send moves instantly, sleep only till waiting time
-
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     // Initialize logging
