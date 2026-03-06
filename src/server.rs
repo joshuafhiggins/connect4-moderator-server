@@ -932,6 +932,9 @@ impl Server {
                     *tournament_guard = None;
                 }
             }
+        } else {
+            let _ = send(&winner_tx, "TOURNAMENT:END");
+            let _ = send(&loser_tx, "TOURNAMENT:END");
         }
 
         Ok(())
