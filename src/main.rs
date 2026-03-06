@@ -168,6 +168,21 @@ async fn handle_connection(
                                     let _ = send(&tx, "ERROR:INVALID:TERMINATE");
                                 }
                             }
+                        } else if parts.get(1) == Some(&"AWARD") && parts.len() > 3 {
+                            match parts[2].parse::<u32>() {
+                                Ok(match_id) => {
+                                    let winner = parts[3].to_string();
+                                    if let Err(e) =
+                                        sd.handle_game_award(addr, match_id, winner).await
+                                    {
+                                        error!("handle_game_award: {}", e);
+                                        let _ = send(&tx, e.to_string().as_str());
+                                    }
+                                }
+                                Err(_) => {
+                                    let _ = send(&tx, "ERROR:INVALID:AWARD");
+                                }
+                            }
                         } else {
                             let _ = send(&tx, "ERROR:INVALID:GAME");
                         }
