@@ -835,11 +835,24 @@ impl Server {
         drop(matches_guard);
 
         let the_match = found_match.read().await;
-        if winner_username != the_match.player1.to_string()
-            && winner_username != the_match.player2.to_string()
-        {
+
+        // Validate that the declared winner is actually one of the players in this match
+        let clients_guard = self.clients.read().await;
+        let player1_client = clients_guard.get(&the_match.player1);
+        let player2_client = clients_guard.get(&the_match.player2);
+
+        // If we cannot resolve both players, or the winner username doesn't match either, reject
+        if let (Some(p1_arc), Some(p2_arc)) = (player1_client, player2_client) {
+            let p1 = p1_arc.read().await;
+            let p2 = p2_arc.read().await;
+
+            if winner_username != p1.username && winner_username != p2.username {
+                return Err(anyhow!("ERROR:INVALID:AWARD"));
+            }
+        } else {
             return Err(anyhow!("ERROR:INVALID:AWARD"));
         }
+        drop(clients_guard);
 
         self.matches.write().await.remove(&match_id);
 
