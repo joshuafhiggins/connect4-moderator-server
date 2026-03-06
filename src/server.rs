@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::time::Instant;
 
 use crate::{tournaments::*, types::*, *};
@@ -818,133 +819,104 @@ impl Server {
         Ok(())
     }
 
-    pub async fn handle_game_award(
+    pub async fn handle_game_award_winner(
         &self,
         addr: SocketAddr,
         match_id: u32,
         winner_username: String,
     ) -> Result<(), anyhow::Error> {
         if !self.auth_check(addr).await {
-            return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
+            return Err(anyhow!("ERROR:INVALID:AUTH"));
         }
 
-        let server_player_addr: SocketAddr = SERVER_PLAYER_ADDR.to_string().parse()?;
+        let matches_guard = self.matches.read().await;
+        let found_match =
+            matches_guard.get(&match_id).ok_or_else(|| anyhow!("ERROR:INVALID:AWARD"))?.clone();
+        drop(matches_guard);
 
-        let (player1_addr, player2_addr, viewers, demo_mode) = {
-            let mut matches_guard = self.matches.write().await;
-            let the_match = matches_guard
-                .get(&match_id)
-                .ok_or_else(|| anyhow::anyhow!("ERROR:INVALID:AWARD"))?
-                .clone();
-            let mut the_match = the_match.write().await;
+        let the_match = found_match.read().await;
+        if winner_username != the_match.player1.to_string()
+            && winner_username != the_match.player2.to_string()
+        {
+            return Err(anyhow!("ERROR:INVALID:AWARD"));
+        }
 
-            if let Some(wait_thread) = &the_match.wait_thread {
-                wait_thread.abort();
-            }
+        self.matches.write().await.remove(&match_id);
 
-            if let Some(timeout_thread) = &the_match.timeout_thread {
-                timeout_thread.abort();
-            }
+        if let Some(wait_thread) = &the_match.wait_thread {
+            wait_thread.abort();
+        }
 
-            let player1_addr = the_match.player1;
-            let player2_addr = the_match.player2;
-            let viewers = the_match.viewers.clone();
-            let demo_mode = the_match.demo_mode;
+        if let Some(timeout_thread) = &the_match.timeout_thread {
+            timeout_thread.abort();
+        }
 
-            matches_guard.remove(&match_id);
-
-            (player1_addr, player2_addr, viewers, demo_mode)
-        };
+        self.broadcast_message(&the_match.viewers, &format!("GAME:WIN:{}", winner_username)).await;
 
         let clients_guard = self.clients.read().await;
-        let player1_name = if player1_addr == server_player_addr {
-            SERVER_PLAYER_USERNAME.to_string()
+        if the_match.demo_mode {
+            let player_win = if winner_username != SERVER_PLAYER_USERNAME {
+                "WINS"
+            } else {
+                "LOSS"
+            };
+            let mut the_player = if the_match.player1 != SERVER_PLAYER_ADDR.parse()? {
+                clients_guard.get(&the_match.player1).unwrap().write().await
+            } else {
+                clients_guard.get(&the_match.player2).unwrap().write().await
+            };
+
+            let _ = send(&the_player.connection, &format!("GAME:{}", player_win));
+            let _ = send(&the_player.connection, "TOURNAMENT:END");
+
+            the_player.color = Color::None;
+            the_player.current_match = None;
+
+            return Ok(());
+        }
+
+        let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
+        let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
+
+        player1.current_match = None;
+        player1.color = Color::None;
+
+        player2.current_match = None;
+        player2.color = Color::None;
+
+        let winner_tx = if player1.username == winner_username {
+            player1.connection.clone()
         } else {
-            clients_guard
-                .get(&player1_addr)
-                .ok_or_else(|| anyhow::anyhow!("ERROR:INVALID:AWARD"))?
-                .read()
-                .await
-                .username
-                .clone()
+            player2.connection.clone()
         };
-        let player2_name = if player2_addr == server_player_addr {
-            SERVER_PLAYER_USERNAME.to_string()
+
+        let loser_tx = if player1.username != winner_username {
+            player1.connection.clone()
         } else {
-            clients_guard
-                .get(&player2_addr)
-                .ok_or_else(|| anyhow::anyhow!("ERROR:INVALID:AWARD"))?
-                .read()
-                .await
-                .username
-                .clone()
+            player2.connection.clone()
         };
+
+        let winner_addr = if player1.username == winner_username {
+            player1.addr.clone()
+        } else {
+            player2.addr.clone()
+        };
+
+        drop(player1);
+        drop(player2);
         drop(clients_guard);
 
-        let winner_username = winner_username.trim().to_string();
-        let winner_is_player1 = winner_username == player1_name;
-        let winner_is_player2 = winner_username == player2_name;
+        let _ = send(&winner_tx, "GAME:WINS");
+        let _ = send(&loser_tx, "GAME:LOSS");
 
-        if !winner_is_player1 && !winner_is_player2 {
-            return Err(anyhow::anyhow!("ERROR:INVALID:AWARD"));
-        }
-
-        let winner_addr = if winner_is_player1 {
-            player1_addr
-        } else {
-            player2_addr
-        };
-        let loser_addr = if winner_is_player1 {
-            player2_addr
-        } else {
-            player1_addr
-        };
-
-        self.broadcast_message(&viewers, &format!("GAME:WIN:{}", winner_username))
-            .await;
-
-        let mut clients_guard = self.clients.write().await;
-        if winner_addr != server_player_addr {
-            let mut winner = clients_guard
-                .get_mut(&winner_addr)
-                .ok_or_else(|| anyhow::anyhow!("ERROR:INVALID:AWARD"))?
-                .write()
-                .await;
-            let _ = send(&winner.connection, "GAME:WINS");
-            winner.current_match = None;
-            winner.color = Color::None;
-        }
-
-        if loser_addr != server_player_addr {
-            let mut loser = clients_guard
-                .get_mut(&loser_addr)
-                .ok_or_else(|| anyhow::anyhow!("ERROR:INVALID:AWARD"))?
-                .write()
-                .await;
-            let _ = send(&loser.connection, "GAME:LOSS");
-            loser.current_match = None;
-            loser.color = Color::None;
-        }
-        drop(clients_guard);
-
-        if self.tournament.read().await.is_some() && self.matches.read().await.is_empty() {
+        if self.tournament.read().await.is_some() {
             let mut tournament_guard = self.tournament.write().await;
             let tourney = tournament_guard.as_mut().unwrap();
             tourney.write().await.inform_winner(winner_addr, false);
-            tourney.write().await.next(&self).await;
-            if tourney.read().await.is_completed() {
-                *tournament_guard = None;
-            }
-        } else if !demo_mode && self.tournament.read().await.is_none() {
-            let clients_guard = self.clients.read().await;
-            if winner_addr != server_player_addr {
-                if let Some(winner) = clients_guard.get(&winner_addr) {
-                    let _ = send(&winner.read().await.connection, "TOURNAMENT:END");
-                }
-            }
-            if loser_addr != server_player_addr {
-                if let Some(loser) = clients_guard.get(&loser_addr) {
-                    let _ = send(&loser.read().await.connection, "TOURNAMENT:END");
+            if self.matches.read().await.is_empty() {
+                tourney.write().await.next(&self).await;
+                if tourney.read().await.is_completed() {
+                    *tournament_guard = None;
                 }
             }
         }

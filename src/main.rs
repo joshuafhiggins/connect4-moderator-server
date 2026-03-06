@@ -173,9 +173,9 @@ async fn handle_connection(
                                 Ok(match_id) => {
                                     let winner = parts[3].to_string();
                                     if let Err(e) =
-                                        sd.handle_game_award(addr, match_id, winner).await
+                                        sd.handle_game_award_winner(addr, match_id, winner).await
                                     {
-                                        error!("handle_game_award: {}", e);
+                                        error!("handle_game_award_winner: {}", e);
                                         let _ = send(&tx, e.to_string().as_str());
                                     }
                                 }
