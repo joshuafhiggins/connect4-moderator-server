@@ -80,8 +80,6 @@ impl Server {
 
         drop(clients_guard);
 
-        self.remove_observer_from_all_matches(addr).await;
-        self.observers.write().await.remove(&addr);
         self.usernames.write().await.insert(requested_username.clone(), addr);
         let _ = send(&tx, "CONNECT:ACK");
 
@@ -246,8 +244,23 @@ impl Server {
         }
 
         self.clients.write().await.remove(&addr);
-        self.observers.write().await.insert(addr, tx.clone());
         let _ = send(&tx, "DISCONNECT:ACK");
+
+        Ok(())
+    }
+
+    pub async fn handle_observe(
+        &self,
+        addr: SocketAddr,
+        tx: UnboundedSender<Message>,
+    ) -> Result<(), anyhow::Error> {
+        let mut observers_guard = self.observers.write().await;
+        if observers_guard.remove(&addr).is_some() {
+            let _ = send(&tx, "OBSERVE:ACK:0");
+        } else {
+            observers_guard.insert(addr, tx.clone());
+            let _ = send(&tx, "OBSERVE:ACK:1");
+        }
 
         Ok(())
     }
@@ -403,7 +416,6 @@ impl Server {
         if invalid {
             let current_match_id = current_match.id;
             let is_demo_mode = current_match.demo_mode;
-            let viewers = current_match.viewers.clone();
 
             drop(current_match);
             drop(matches_guard);
@@ -419,7 +431,8 @@ impl Server {
 
                 let _ = send(&tx, "GAME:LOSS");
                 let _ = send(&opponent.connection, "GAME:WINS");
-                self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent.username)).await;
+                self.broadcast_message_all_observers(&format!("GAME:WIN:{}", opponent.username))
+                    .await;
 
                 opponent.current_match = None;
                 opponent.color = Color::None;
@@ -448,10 +461,8 @@ impl Server {
             timeout_thread.abort();
         }
 
-        let mut viewer_messages = Vec::new();
-        let viewers = current_match.viewers.clone();
-
-        viewer_messages.push(format!("GAME:MOVE:{}:{}", client.username, column));
+        let mut observer_messages = Vec::new();
+        observer_messages.push(format!("GAME:MOVE:{}:{}", client.username, column));
 
         // Check game end conditions
         let (winner, filled) = current_match.end_game_check();
@@ -464,7 +475,7 @@ impl Server {
                 let opponent = opponent.read().await;
                 let _ = send(&opponent.connection, "GAME:LOSS");
             }
-            viewer_messages.push(format!("GAME:WIN:{}", client.username));
+            observer_messages.push(format!("GAME:WIN:{}", client.username));
         } else if filled {
             let _ = send(&tx, "GAME:DRAW");
             if !current_match.demo_mode {
@@ -472,7 +483,7 @@ impl Server {
                 let opponent = opponent.read().await;
                 let _ = send(&opponent.connection, "GAME:DRAW");
             }
-            viewer_messages.push("GAME:DRAW".to_string());
+            observer_messages.push("GAME:DRAW".to_string());
         }
 
         // remove match from matchmaker
@@ -564,19 +575,21 @@ impl Server {
                 );
             }
 
-            for msg in viewer_messages {
-                broadcast_message(&observers, &viewers, &msg).await;
+            for msg in observer_messages {
+                let observers_guard = observers.read().await;
+                for (_, tx) in observers_guard.iter() {
+                    let _ = send(tx, &msg);
+                }
             }
 
             if demo_mode && no_winner {
                 tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
                 let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
-                broadcast_message(
-                    &observers,
-                    &viewers,
-                    &format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move),
-                )
-                .await;
+                let observers_guard = observers.read().await;
+                let msg = format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move);
+                for (_, tx) in observers_guard.iter() {
+                    let _ = send(tx, &msg);
+                }
             }
         }));
 
@@ -590,7 +603,6 @@ impl Server {
         let client_tx = tx.clone();
         let client_addr = addr.clone();
         let observers = self.observers.clone();
-        let viewers = current_match.viewers.clone();
         let opponent_move = opponent.clone();
         current_match.timeout_thread = Some(tokio::spawn(async move {
             if demo_mode {
@@ -610,12 +622,11 @@ impl Server {
                     let opponent = opponent.read().await;
                     let _ = send(&opponent.connection, "GAME:LOSS");
                     drop(opponent);
-                    broadcast_message(
-                        &observers,
-                        &viewers,
-                        &format!("GAME:WIN:{}", client_username),
-                    )
-                    .await;
+                    let observers_guard = observers.read().await;
+                    let msg = format!("GAME:WIN:{}", client_username);
+                    for (_, tx) in observers_guard.iter() {
+                        let _ = send(tx, &msg);
+                    }
 
                     let mut clients_guard = clients.write().await;
                     let mut client = clients_guard.get_mut(&client_addr).unwrap().write().await;
@@ -709,10 +720,9 @@ impl Server {
         &self,
         tx: UnboundedSender<Message>,
         match_id: u32,
-        addr: SocketAddr,
+        _addr: SocketAddr,
     ) -> Result<(), anyhow::Error> {
-        let result = self.watch(match_id, addr).await;
-        if result.is_err() {
+        if self.matches.read().await.get(&match_id).is_none() {
             return Err(anyhow::anyhow!("ERROR:INVALID:WATCH"));
         }
 
@@ -864,7 +874,8 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message(&the_match.viewers, &format!("GAME:WIN:{}", winner_username)).await;
+        self.broadcast_message_all_observers(&format!("GAME:WIN:{}", winner_username))
+            .await;
 
         let clients_guard = self.clients.read().await;
         if the_match.demo_mode {
@@ -1187,54 +1198,6 @@ impl Server {
         Ok(())
     }
 
-    pub async fn watch(&self, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
-        let matches_guard = self.matches.read().await;
-
-        for match_guard in matches_guard.values() {
-            let mut found = false;
-            let mut a_match = match_guard.write().await;
-            for i in 0..a_match.viewers.len() {
-                if a_match.viewers[i] == addr {
-                    a_match.viewers.remove(i);
-                    found = true;
-                    break;
-                }
-            }
-
-            if found {
-                break;
-            }
-        }
-
-        let result = matches_guard.get(&new_match_id);
-        if result.is_none() {
-            return Err("Match not found".to_string());
-        }
-        result.unwrap().write().await.viewers.push(addr);
-
-        Ok(())
-    }
-
-    pub async fn remove_observer_from_all_matches(&self, addr: SocketAddr) {
-        let matches_guard = self.matches.read().await;
-
-        for match_guard in matches_guard.values() {
-            let mut found = false;
-            let mut a_match = match_guard.write().await;
-            for i in 0..a_match.viewers.len() {
-                if a_match.viewers[i] == addr {
-                    a_match.viewers.remove(i);
-                    found = true;
-                    break;
-                }
-            }
-
-            if found {
-                break;
-            }
-        }
-    }
-
     pub async fn terminate_match(&self, match_id: u32) {
         let matches_guard = self.matches.read().await;
         let the_match = matches_guard.get(&match_id);
@@ -1254,7 +1217,7 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message(&the_match.viewers, "GAME:TERMINATED").await;
+        self.broadcast_message_all_observers("GAME:TERMINATED").await;
 
         let clients_guard = self.clients.read().await;
         if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {

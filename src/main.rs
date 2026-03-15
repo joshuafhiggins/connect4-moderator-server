@@ -51,9 +51,6 @@ async fn handle_connection(
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // Store the client
-    sd.observers.write().await.insert(addr, tx.clone());
-
     // Spawn task to handle outgoing messages
     let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -100,6 +97,12 @@ async fn handle_connection(
                     "DISCONNECT" => {
                         if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
                             error!("handle_disconnect: {}", e);
+                            let _ = send(&tx, e.to_string().as_str());
+                        }
+                    }
+                    "OBSERVE" => {
+                        if let Err(e) = sd.handle_observe(addr, tx.clone()).await {
+                            error!("handle_observe: {}", e);
                             let _ = send(&tx, e.to_string().as_str());
                         }
                     }
