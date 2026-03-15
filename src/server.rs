@@ -431,8 +431,11 @@ impl Server {
 
                 let _ = send(&tx, "GAME:LOSS");
                 let _ = send(&opponent.connection, "GAME:WINS");
-                self.broadcast_message_all_observers(&format!("GAME:WIN:{}", opponent.username))
-                    .await;
+                self.broadcast_message_all_observers(&format!(
+                    "GAME:{}:WIN:{}",
+                    current_match_id, opponent.username
+                ))
+                .await;
 
                 opponent.current_match = None;
                 opponent.color = Color::None;
@@ -462,7 +465,10 @@ impl Server {
         }
 
         let mut observer_messages = Vec::new();
-        observer_messages.push(format!("GAME:MOVE:{}:{}", client.username, column));
+        observer_messages.push(format!(
+            "GAME:{}:MOVE:{}:{}",
+            current_match.id, client.username, column
+        ));
 
         // Check game end conditions
         let (winner, filled) = current_match.end_game_check();
@@ -475,7 +481,7 @@ impl Server {
                 let opponent = opponent.read().await;
                 let _ = send(&opponent.connection, "GAME:LOSS");
             }
-            observer_messages.push(format!("GAME:WIN:{}", client.username));
+            observer_messages.push(format!("GAME:{}:WIN:{}", current_match.id, client.username));
         } else if filled {
             let _ = send(&tx, "GAME:DRAW");
             if !current_match.demo_mode {
@@ -483,7 +489,7 @@ impl Server {
                 let opponent = opponent.read().await;
                 let _ = send(&opponent.connection, "GAME:DRAW");
             }
-            observer_messages.push("GAME:DRAW".to_string());
+            observer_messages.push(format!("GAME:{}:DRAW", current_match.id));
         }
 
         // remove match from matchmaker
@@ -558,6 +564,7 @@ impl Server {
         let observers = self.observers.clone();
         let opponent_move = opponent.clone();
         let client_tx = tx.clone();
+        let wait_match_id = current_match.id;
         if current_match.demo_mode {
             current_match.ledger.push((!client.color, demo_move, Instant::now()));
             current_match.place_token(!client.color, demo_move);
@@ -586,7 +593,10 @@ impl Server {
                 tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
                 let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
                 let observers_guard = observers.read().await;
-                let msg = format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move);
+                let msg = format!(
+                    "GAME:{}:MOVE:{}:{}",
+                    wait_match_id, SERVER_PLAYER_USERNAME, demo_move
+                );
                 for (_, tx) in observers_guard.iter() {
                     let _ = send(tx, &msg);
                 }
@@ -623,7 +633,7 @@ impl Server {
                     let _ = send(&opponent.connection, "GAME:LOSS");
                     drop(opponent);
                     let observers_guard = observers.read().await;
-                    let msg = format!("GAME:WIN:{}", client_username);
+                    let msg = format!("GAME:{}:WIN:{}", match_id, client_username);
                     for (_, tx) in observers_guard.iter() {
                         let _ = send(tx, &msg);
                     }
@@ -874,7 +884,7 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message_all_observers(&format!("GAME:WIN:{}", winner_username))
+        self.broadcast_message_all_observers(&format!("GAME:{}:WIN:{}", match_id, winner_username))
             .await;
 
         let clients_guard = self.clients.read().await;
@@ -1217,7 +1227,8 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message_all_observers("GAME:TERMINATED").await;
+        self.broadcast_message_all_observers(&format!("GAME:{}:TERMINATED", match_id))
+            .await;
 
         let clients_guard = self.clients.read().await;
         if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
