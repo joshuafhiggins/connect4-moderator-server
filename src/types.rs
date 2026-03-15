@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use std::net::SocketAddr;
 use std::time::Instant;
 use std::{ops, vec};
