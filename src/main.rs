@@ -49,7 +49,7 @@ async fn handle_connection(
 
     let ws_stream = accept_async(stream).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
 
     // Spawn task to handle outgoing messages
     let send_task = tokio::spawn(async move {
@@ -262,7 +262,15 @@ async fn handle_connection(
                             let player1_username = usernames[0].to_string();
                             let player2_username = usernames[1].to_string();
 
-                            if let Err(e) = sd.handle_reservation_add(tx.clone(), addr, player1_username, player2_username).await {
+                            if let Err(e) = sd
+                                .handle_reservation_add(
+                                    tx.clone(),
+                                    addr,
+                                    player1_username,
+                                    player2_username,
+                                )
+                                .await
+                            {
                                 error!("handle_reservation_add: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }
@@ -277,7 +285,15 @@ async fn handle_connection(
                             let player1_username = usernames[0].to_string();
                             let player2_username = usernames[1].to_string();
 
-                            if let Err(e) = sd.handle_reservation_delete(tx.clone(), addr, player1_username, player2_username).await {
+                            if let Err(e) = sd
+                                .handle_reservation_delete(
+                                    tx.clone(),
+                                    addr,
+                                    player1_username,
+                                    player2_username,
+                                )
+                                .await
+                            {
                                 error!("handle_reservation_delete: {}", e);
                                 let _ = send(&tx, e.to_string().as_str());
                             }

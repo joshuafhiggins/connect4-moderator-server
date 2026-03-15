@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::sync::{
     mpsc::{error::SendError, UnboundedSender},
     RwLock,

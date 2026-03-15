@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use rand::RngExt;
 use std::time::Instant;
 
 use crate::{tournaments::*, types::*, *};
@@ -1227,8 +1228,7 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message_all_observers(&format!("GAME:{}:TERMINATED", match_id))
-            .await;
+        self.broadcast_message_all_observers(&format!("GAME:{}:TERMINATED", match_id)).await;
 
         let clients_guard = self.clients.read().await;
         if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
