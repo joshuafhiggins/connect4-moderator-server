@@ -167,7 +167,7 @@ impl Tournament for RoundRobin {
         }
         message.pop();
 
-        server.broadcast_message_all_observers(&message).await;
+        server.broadcast(&message).await;
 
         if self.is_completed() {
             // Send scores

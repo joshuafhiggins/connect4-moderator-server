@@ -432,7 +432,7 @@ impl Server {
 
                 let _ = send(&tx, "GAME:LOSS");
                 let _ = send(&opponent.connection, "GAME:WINS");
-                self.broadcast_message_all_observers(&format!(
+                self.broadcast(&format!(
                     "GAME:{}:WIN:{}",
                     current_match_id, opponent.username
                 ))
@@ -885,7 +885,7 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message_all_observers(&format!("GAME:{}:WIN:{}", match_id, winner_username))
+        self.broadcast(&format!("GAME:{}:WIN:{}", match_id, winner_username))
             .await;
 
         let clients_guard = self.clients.read().await;
@@ -1001,7 +1001,7 @@ impl Server {
         // Clear any pending reservations when a tournament starts
         self.reservations.write().await.clear();
 
-        self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type))
+        self.broadcast(&format!("TOURNAMENT:START:{}", tournament_type))
             .await;
         Ok(())
     }
@@ -1020,7 +1020,7 @@ impl Server {
         tourney.write().await.cancel(&self).await;
         *tournament_guard = None;
 
-        self.broadcast_message_all_observers("TOURNAMENT:CANCEL").await;
+        self.broadcast("TOURNAMENT:CANCEL").await;
         Ok(())
     }
 
@@ -1228,7 +1228,7 @@ impl Server {
             timeout_thread.abort();
         }
 
-        self.broadcast_message_all_observers(&format!("GAME:{}:TERMINATED", match_id)).await;
+        self.broadcast(&format!("GAME:{}:TERMINATED", match_id)).await;
 
         let clients_guard = self.clients.read().await;
         if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
@@ -1263,7 +1263,7 @@ impl Server {
         }
     }
 
-    pub async fn broadcast_message_all_observers(&self, msg: &str) {
+    pub async fn broadcast(&self, msg: &str) {
         let observers_guard = self.observers.read().await;
         for (_, tx) in observers_guard.iter() {
             let _ = send(tx, msg);
