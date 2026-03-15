@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 
@@ -9,7 +9,7 @@ type ID = u32;
 
 #[derive(Clone)]
 pub struct RoundRobin {
-    pub players: HashMap<ID, (SocketAddr, Score)>,
+    pub players: HashMap<ID, (String, Score)>,
     pub top_half: Vec<ID>,
     pub bottom_half: Vec<ID>,
     pub is_completed: bool,
@@ -30,8 +30,8 @@ impl RoundRobin {
             let match_id: u32 = gen_match_id(matches).await;
             let new_match = Arc::new(RwLock::new(Match::new(
                 match_id,
-                player1_addr.0,
-                player2_addr.0,
+                player1_addr.0.clone(),
+                player2_addr.0.clone(),
                 false,
             )));
 
@@ -73,7 +73,7 @@ impl RoundRobin {
 
 #[async_trait]
 impl Tournament for RoundRobin {
-    fn new(ready_players: &[SocketAddr]) -> RoundRobin {
+    fn new(ready_players: &[String]) -> RoundRobin {
         let mut result = RoundRobin {
             players: HashMap::new(),
             top_half: Vec::new(),
@@ -84,7 +84,7 @@ impl Tournament for RoundRobin {
         let size = ready_players.len();
 
         for (id, player) in ready_players.iter().enumerate() {
-            result.players.insert(id as u32, (*player, 0));
+            result.players.insert(id as u32, (player.clone(), 0));
         }
 
         for i in 0..size / 2 {
@@ -98,7 +98,7 @@ impl Tournament for RoundRobin {
         result
     }
 
-    fn inform_winner(&mut self, winner: SocketAddr, is_tie: bool) {
+    fn inform_winner(&mut self, winner: String, is_tie: bool) {
         if is_tie {
             return;
         }
@@ -111,18 +111,9 @@ impl Tournament for RoundRobin {
         }
     }
 
-    fn inform_reconnect(&mut self, old_addr: SocketAddr, new_addr: SocketAddr) {
-        for (_, (player_addr, _)) in self.players.iter_mut() {
-            if *player_addr == old_addr {
-                *player_addr = new_addr;
-                break;
-            }
-        }
-    }
-
-    fn contains_player(&self, addr: SocketAddr) -> bool {
+    fn contains_player(&self, username: &str) -> bool {
         for (_, (player_addr, _)) in self.players.iter() {
-            if *player_addr == addr {
+            if player_addr == username {
                 return true;
             }
         }

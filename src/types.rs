@@ -61,20 +61,20 @@ pub struct Match {
     pub id: u32,
     pub demo_mode: bool,
     pub board: Vec<Vec<Color>>,
-    pub viewers: Vec<SocketAddr>,
+    pub viewers: Vec<String>,
     pub ledger: Vec<(Color, usize, Instant)>,
     pub wait_thread: Option<tokio::task::JoinHandle<()>>,
     pub timeout_thread: Option<tokio::task::JoinHandle<()>>,
-    pub player1: SocketAddr,
-    pub player2: SocketAddr,
+    pub player1: String,
+    pub player2: String,
 }
 
 impl Match {
-    pub fn new(id: u32, player1: SocketAddr, player2: SocketAddr, demo_mode: bool) -> Match {
-        let first = if rand::rng().random_range(0..=1) == 0 {
-            player1.to_string().parse().unwrap()
+    pub fn new(id: u32, player1: String, player2: String, demo_mode: bool) -> Match {
+        let (first_player, second_player) = if rand::rng().random_range(0..=1) == 0 {
+            (player1, player2)
         } else {
-            player2.to_string().parse().unwrap()
+            (player2, player1)
         };
 
         Match {
@@ -85,8 +85,8 @@ impl Match {
             ledger: Vec::new(),
             wait_thread: None,
             timeout_thread: None,
-            player1: if player1 == first { player1 } else { player2 },
-            player2: if player1 == first { player2 } else { player1 },
+            player1: first_player,
+            player2: second_player,
         }
     }
 

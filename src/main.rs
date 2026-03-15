@@ -312,16 +312,22 @@ async fn handle_connection(
 
     // Remove and terminate any matches
     // We may not be a client disconnecting, do this check
+    let username_from_addr = sd
+        .usernames
+        .read()
+        .await
+        .iter()
+        .find_map(|(username, client_addr)| if *client_addr == addr { Some(username.clone()) } else { None });
     let clients_guard = sd.clients.read().await;
-    if clients_guard.get(&addr).is_some() {
-        let client = clients_guard.get(&addr).unwrap().read().await;
+    if let Some(username) = username_from_addr.clone() {
+        let client = clients_guard.get(&username).unwrap().read().await;
         let username = client.username.clone();
         let tournament_guard = sd.tournament.read().await;
         if client.current_match.is_some() {
             sd.disconnected_clients.write().await.push(username.clone());
         } else if tournament_guard.is_some() {
             let tourney = tournament_guard.clone().unwrap();
-            if tourney.read().await.contains_player(addr) {
+            if tourney.read().await.contains_player(&username) {
                 sd.disconnected_clients.write().await.push(username.clone());
             }
         }
@@ -329,16 +335,18 @@ async fn handle_connection(
         drop(client);
         drop(clients_guard);
 
-        sd.clients.write().await.remove(&addr);
+        sd.clients.write().await.remove(&username);
         sd.usernames.write().await.remove(&username);
     }
 
     sd.observers.write().await.remove(&addr);
 
     let mut admin_guard = sd.admin.write().await;
-    if let Some(admin_addr) = *admin_guard {
-        if admin_addr == addr {
-            *admin_guard = None;
+    if let Some(admin_username) = admin_guard.as_ref() {
+        if let Some(username) = username_from_addr {
+            if admin_username == &username {
+                *admin_guard = None;
+            }
         }
     }
     drop(admin_guard);

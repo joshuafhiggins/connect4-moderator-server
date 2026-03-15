@@ -17,7 +17,7 @@ pub mod server;
 pub mod tournaments;
 pub mod types;
 
-pub type Clients = Arc<RwLock<HashMap<SocketAddr, Arc<RwLock<Client>>>>>;
+pub type Clients = Arc<RwLock<HashMap<String, Arc<RwLock<Client>>>>>;
 pub type Usernames = Arc<RwLock<HashMap<String, SocketAddr>>>;
 pub type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
 pub type Matches = Arc<RwLock<HashMap<u32, Arc<RwLock<Match>>>>>;
@@ -25,12 +25,24 @@ pub type Reservations = Arc<RwLock<Vec<(String, String)>>>;
 pub type WrappedTournament = Arc<RwLock<Option<Arc<RwLock<dyn Tournament + Send + Sync>>>>>;
 
 pub const SERVER_PLAYER_USERNAME: &str = "The Server";
-pub const SERVER_PLAYER_ADDR: &str = "127.0.0.1:6666";
 
-pub async fn broadcast_message(observers: &Observers, addrs: &Vec<SocketAddr>, msg: &str) {
-    for addr in addrs {
+pub async fn broadcast_message(
+    clients: &Clients,
+    observers: &Observers,
+    usernames: &Vec<String>,
+    msg: &str,
+) {
+    for username in usernames {
+        let client_guard = {
+            let clients_guard = clients.read().await;
+            clients_guard.get(username).cloned()
+        };
+        let Some(client_guard) = client_guard else {
+            continue;
+        };
+        let addr = client_guard.read().await.addr;
         let observers_guard = observers.read().await;
-        let tx = observers_guard.get(addr);
+        let tx = observers_guard.get(&addr);
         if tx.is_none() {
             continue;
         }
