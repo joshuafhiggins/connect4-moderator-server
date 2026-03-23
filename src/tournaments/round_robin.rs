@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 
@@ -9,7 +9,7 @@ type ID = u32;
 
 #[derive(Clone)]
 pub struct RoundRobin {
-  pub players: HashMap<ID, (SocketAddr, Score)>,
+  pub players: HashMap<ID, (String, Score)>,
   pub top_half: Vec<ID>,
   pub bottom_half: Vec<ID>,
   pub is_completed: bool,
@@ -19,29 +19,29 @@ impl RoundRobin {
   async fn create_matches(&self, clients: &Clients, matches: &Matches) {
     let clients_guard = clients.read().await;
     for (i, id) in self.top_half.iter().enumerate() {
-      let player1_addr = self.players.get(id).unwrap();
-      let player2_addr = self.players.get(self.bottom_half.get(i).unwrap());
+      let player1_username = self.players.get(id).unwrap();
+      let player2_username = self.players.get(self.bottom_half.get(i).unwrap());
 
-      if player2_addr.is_none() {
+      if player2_username.is_none() {
         continue;
       }
-      let player2_addr = player2_addr.unwrap();
+      let player2_addr = player2_username.unwrap();
 
       let match_id: u32 = gen_match_id(matches).await;
       let new_match = Arc::new(RwLock::new(Match::new(
         match_id,
-        player1_addr.0,
-        player2_addr.0,
+        player1_username.0.clone(),
+        player2_addr.0.clone(),
         false,
       )));
 
       let match_guard = new_match.read().await;
-      let mut player1 = clients_guard.get(&player1_addr.0).unwrap().write().await;
+      let mut player1 = clients_guard.get(&player1_username.0).unwrap().write().await;
 
       player1.current_match = Some(match_id);
       player1.ready = false;
 
-      if match_guard.player1 == player1_addr.0 {
+      if match_guard.player1 == player1_username.0 {
         player1.color = Color::Red;
         let _ = send(&player1.connection, "GAME:START:1");
       } else {
@@ -73,7 +73,7 @@ impl RoundRobin {
 
 #[async_trait]
 impl Tournament for RoundRobin {
-  fn new(ready_players: &[SocketAddr]) -> RoundRobin {
+  fn new(ready_players: &[String]) -> RoundRobin {
     let mut result = RoundRobin {
       players: HashMap::new(),
       top_half: Vec::new(),
@@ -84,7 +84,7 @@ impl Tournament for RoundRobin {
     let size = ready_players.len();
 
     for (id, player) in ready_players.iter().enumerate() {
-      result.players.insert(id as u32, (*player, 0));
+      result.players.insert(id as u32, (player.clone(), 0));
     }
 
     for i in 0..size / 2 {
@@ -98,31 +98,22 @@ impl Tournament for RoundRobin {
     result
   }
 
-  fn inform_winner(&mut self, winner: SocketAddr, is_tie: bool) {
+  fn inform_winner(&mut self, winner: String, is_tie: bool) {
     if is_tie {
       return;
     }
 
-    for (_, player_addr) in self.players.iter_mut() {
-      if player_addr.0 == winner {
-        player_addr.1 += 1;
+    for (_, username) in self.players.iter_mut() {
+      if username.0 == winner {
+        username.1 += 1;
         break;
       }
     }
   }
 
-  fn inform_reconnect(&mut self, old_addr: SocketAddr, new_addr: SocketAddr) {
-    for (_, (player_addr, _)) in self.players.iter_mut() {
-      if *player_addr == old_addr {
-        *player_addr = new_addr;
-        break;
-      }
-    }
-  }
-
-  fn contains_player(&self, addr: SocketAddr) -> bool {
-    for (_, (player_addr, _)) in self.players.iter() {
-      if *player_addr == addr {
+  fn contains_player(&self, username: String) -> bool {
+    for (_, (player_username, _)) in self.players.iter() {
+      if *player_username == username {
         return true;
       }
     }
@@ -167,7 +158,7 @@ impl Tournament for RoundRobin {
     }
     message.pop();
 
-    server.broadcast_message_all_observers(&message).await;
+    server.broadcast(&message).await;
 
     if self.is_completed() {
       // Send scores

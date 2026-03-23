@@ -63,31 +63,23 @@ impl Server {
     }
 
     let clients_guard = self.clients.read().await;
-    let mut reconnecting_client = None;
-    for client in clients_guard.values() {
-      if requested_username == client.read().await.username {
-        if reconnecting {
-          reconnecting_client = Some(client.clone());
-          break;
-        }
-
-        return Err(anyhow::anyhow!(format!(
-          "ERROR:INVALID:ID:{}",
-          requested_username
-        )));
-      }
+    let existing_client = clients_guard.get(&requested_username).cloned();
+    if existing_client.is_some() && !reconnecting {
+      return Err(anyhow::anyhow!(format!(
+        "ERROR:INVALID:ID:{}",
+        requested_username
+      )));
     }
 
     drop(clients_guard);
 
-    self.remove_observer_from_all_matches(addr).await;
     self.observers.write().await.remove(&addr);
-    self.usernames.write().await.insert(requested_username.clone(), addr);
+    self.usernames.write().await.insert(addr, requested_username.clone());
     let _ = send(&tx, "CONNECT:ACK");
 
     if !reconnecting {
       self.clients.write().await.insert(
-        addr.to_string().parse()?,
+        requested_username.clone(),
         Arc::new(RwLock::new(Client::new(
           requested_username,
           tx.clone(),
@@ -100,9 +92,8 @@ impl Server {
 
     // reconnecting
     self.disconnected_clients.write().await.retain(|name| name != &requested_username);
-    let client_guard = reconnecting_client.unwrap();
+    let client_guard = existing_client.unwrap();
     let mut client = client_guard.write().await;
-    let old_addr = client.addr;
     client.addr = addr;
     client.connection = tx.clone();
     // I don't think this will fail
@@ -110,18 +101,6 @@ impl Server {
     let client_color = client.color;
 
     drop(client);
-
-    let mut clients_guard = self.clients.write().await;
-    clients_guard.remove(&old_addr);
-    clients_guard.insert(addr, client_guard.clone());
-    drop(clients_guard);
-
-    let tournament_guard = self.tournament.read().await;
-    if tournament_guard.is_some() {
-      let tourney = tournament_guard.clone().unwrap();
-      tourney.write().await.inform_reconnect(old_addr, addr);
-    }
-    drop(tournament_guard);
 
     let matches_guard = self.matches.read().await;
     let mut the_match = matches_guard.get(&match_id).unwrap().write().await;
@@ -133,10 +112,10 @@ impl Server {
     } else {
       the_match.ledger.clear();
       the_match.board = vec![vec![Color::None; 6]; 7];
-      let opponent_addr = if the_match.player1 == addr {
-        the_match.player2
+      let opponent_username = if the_match.player1 == requested_username {
+        the_match.player2.clone()
       } else {
-        the_match.player1
+        the_match.player1.clone()
       };
 
       if the_match.wait_thread.is_some() {
@@ -148,7 +127,7 @@ impl Server {
       }
 
       let clients_guard = self.clients.read().await;
-      let opponent = clients_guard.get(&opponent_addr).unwrap().read().await;
+      let opponent = clients_guard.get(&opponent_username).unwrap().read().await;
       let _ = send(&opponent.connection, "GAME:TERMINATED");
       let _ = send(
         &tx,
@@ -171,16 +150,11 @@ impl Server {
   ) -> Result<(), anyhow::Error> {
     let clients_guard = self.clients.read().await;
     let disconnected_guard = self.disconnected_clients.read().await;
-    let mut found_client = None;
-
-    for client in clients_guard.values() {
-      if requested_username == client.read().await.username {
-        if disconnected_guard.contains(&requested_username) {
-          found_client = Some(client.clone());
-        }
-        break;
-      }
-    }
+    let found_client = if disconnected_guard.contains(&requested_username) {
+      clients_guard.get(&requested_username).cloned()
+    } else {
+      None
+    };
 
     drop(clients_guard);
     drop(disconnected_guard);
@@ -188,14 +162,8 @@ impl Server {
     if let Some(client_guard) = found_client {
       self.disconnected_clients.write().await.retain(|name| name != &requested_username);
       let mut client = client_guard.write().await;
-      let old_addr = client.addr;
       client.addr = addr;
       client.connection = tx.clone();
-
-      let mut clients_guard = self.clients.write().await;
-      clients_guard.remove(&old_addr);
-      clients_guard.insert(addr, client_guard.clone());
-      drop(clients_guard);
 
       let _ = send(&tx, "RECONNECT:ACK");
 
@@ -225,18 +193,19 @@ impl Server {
     tx: UnboundedSender<Message>,
   ) -> Result<(), anyhow::Error> {
     let clients_guard = self.clients.read().await;
-    let client_opt = clients_guard.get(&addr).cloned();
+    let usernames_guard = self.usernames.read().await;
+    let username = usernames_guard.get(&addr).cloned();
 
-    if client_opt.is_none() {
+    if username.is_none() {
       return Err(anyhow::anyhow!("ERROR:INVALID:DISCONNECT"));
     }
 
-    drop(clients_guard);
+    let username = username.unwrap();
+    let client = clients_guard.get(&username).cloned().unwrap();
+    let client = client.read().await;
 
-    let mut client = client_opt.as_ref().unwrap().write().await;
-    self.usernames.write().await.remove(&client.username);
-    client.ready = false;
-    client.color = Color::None;
+    drop(clients_guard);
+    drop(usernames_guard);
 
     if client.current_match.is_some() {
       let match_id = client.current_match.unwrap();
@@ -245,9 +214,29 @@ impl Server {
       self.terminate_match(match_id).await;
     }
 
-    self.clients.write().await.remove(&addr);
-    self.observers.write().await.insert(addr, tx.clone());
+    self.clients.write().await.remove(&username);
+    self.usernames.write().await.remove(&addr);
     let _ = send(&tx, "DISCONNECT:ACK");
+
+    Ok(())
+  }
+
+  pub async fn handle_observe(
+    &self,
+    addr: SocketAddr,
+    tx: UnboundedSender<Message>,
+  ) -> Result<(), anyhow::Error> {
+    if self.usernames.read().await.get(&addr).cloned().is_some() {
+      return Err(anyhow::anyhow!("ERROR:INVALID:OBSERVE"));
+    }
+
+    let mut observers_guard = self.observers.write().await;
+    if observers_guard.remove(&addr).is_some() {
+      let _ = send(&tx, "OBSERVE:ACK:0");
+    } else {
+      observers_guard.insert(addr, tx.clone());
+      let _ = send(&tx, "OBSERVE:ACK:1");
+    }
 
     Ok(())
   }
@@ -258,38 +247,41 @@ impl Server {
     tx: UnboundedSender<Message>,
   ) -> Result<(), anyhow::Error> {
     let clients_guard = self.clients.read().await;
-    if clients_guard.get(&addr).is_none() {
+    let username = self.usernames.read().await.get(&addr).cloned();
+
+    if username.is_none() {
       return Err(anyhow::anyhow!("ERROR:INVALID"));
     }
 
-    if clients_guard.get(&addr).unwrap().read().await.ready {
+    let username = username.unwrap();
+
+    if clients_guard.get(&username).unwrap().read().await.ready {
       return Err(anyhow::anyhow!("ERROR:INVALID:READY"));
     }
 
-    let mut client = clients_guard.get(&addr).unwrap().write().await;
-    let client_username = client.username.clone();
+    let mut client = clients_guard.get(&username).unwrap().write().await;
     client.ready = true;
     let _ = send(&tx, "READY:ACK");
     drop(client);
     drop(clients_guard);
 
-    if let Some(opponent_addr) = self.find_reservation_opponent(client_username).await {
+    if let Some(opponent_username) = self.find_reservation_opponent(&username).await {
       let clients_guard = self.clients.read().await;
-      let mut client = clients_guard.get(&addr).unwrap().write().await;
-      let mut opponent = clients_guard.get(&opponent_addr).unwrap().write().await;
+      let mut client = clients_guard.get(&username).unwrap().write().await;
+      let mut opponent = clients_guard.get(&opponent_username).unwrap().write().await;
 
       let match_id: u32 = gen_match_id(&self.matches).await;
       let new_match = Arc::new(RwLock::new(Match::new(
         match_id,
-        addr,
-        opponent_addr,
+        username.clone(),
+        opponent_username,
         false,
       )));
       self.matches.write().await.insert(match_id, new_match.clone());
 
       client.ready = false;
       client.current_match = Some(match_id);
-      client.color = if new_match.read().await.player1 == addr {
+      client.color = if new_match.read().await.player1 == username {
         let _ = send(&tx, "GAME:START:1");
         let _ = send(&opponent.connection, "GAME:START:0");
         Color::Red
@@ -313,26 +305,56 @@ impl Server {
     }
 
     let clients_guard = self.clients.read().await;
-    let mut client = clients_guard.get(&addr).unwrap().write().await;
+    let mut client = clients_guard.get(&username).unwrap().write().await;
     let is_demo_mode = self.demo_mode.read().await.clone();
     if is_demo_mode {
       let match_id: u32 = gen_match_id(&self.matches).await;
       let new_match = Arc::new(RwLock::new(Match::new(
         match_id,
-        addr.to_string().parse()?,
-        SERVER_PLAYER_ADDR.to_string().parse()?,
+        username.clone(),
+        SERVER_PLAYER_USERNAME.to_string(),
         is_demo_mode,
       )));
       self.matches.write().await.insert(match_id, new_match.clone());
       client.ready = false;
       client.current_match = Some(match_id);
-      client.color = if new_match.read().await.player1 == addr {
+      client.color = if new_match.read().await.player1 == username {
         let _ = send(&tx, "GAME:START:1");
         Color::Red
       } else {
         let _ = send(&tx, "GAME:START:0");
         Color::Yellow
       };
+
+      if client.color == Color::Yellow {
+        let default_waiting_time = *self.waiting_timeout.read().await;
+
+        let demo_move = {
+          let mut the_match = new_match.write().await;
+          let opening_move = random_move(&the_match.board);
+          the_match.ledger.push((Color::Red, opening_move, Instant::now()));
+          the_match.place_token(Color::Red, opening_move);
+          opening_move
+        };
+
+        let observers = self.observers.clone();
+        let client_tx = tx.clone();
+        let wait_match_id = match_id;
+
+        new_match.write().await.wait_thread = Some(tokio::spawn(async move {
+          tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
+          let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
+
+          let observers_guard = observers.read().await;
+          let msg = format!(
+            "GAME:{}:MOVE:{}:{}",
+            wait_match_id, SERVER_PLAYER_USERNAME, demo_move
+          );
+          for (_, tx) in observers_guard.iter() {
+            let _ = send(tx, &msg);
+          }
+        }));
+      }
     }
 
     Ok(())
@@ -345,13 +367,20 @@ impl Server {
     column: usize,
   ) -> Result<(), anyhow::Error> {
     let clients_guard = self.clients.read().await;
-    let client_opt = clients_guard.get(&addr);
+    let usernames_guard = self.usernames.read().await;
+    let username = usernames_guard.get(&addr).cloned();
 
-    // Check if client is valid
-    if client_opt.is_none() || client_opt.unwrap().read().await.current_match.is_none() {
+    if username.is_none() {
       return Err(anyhow::anyhow!("ERROR:INVALID:MOVE"));
     }
-    let client = client_opt.unwrap().read().await;
+
+    let username = username.unwrap();
+    let client = clients_guard.get(&username).unwrap().read().await;
+
+    // Check if client is valid
+    if client.current_match.is_none() {
+      return Err(anyhow::anyhow!("ERROR:INVALID:MOVE"));
+    }
 
     let matches_guard = self.matches.read().await;
     let current_match = matches_guard.get(&client.current_match.unwrap()).unwrap().read().await;
@@ -360,13 +389,13 @@ impl Server {
       let mut result = None;
 
       if !current_match.demo_mode {
-        let opponent_addr = if addr == current_match.player1 {
-          current_match.player2
+        let opponent_username = if username == current_match.player1 {
+          current_match.player2.clone()
         } else {
-          current_match.player1
+          current_match.player1.clone()
         };
 
-        result = Some(clients_guard.get(&opponent_addr).cloned().unwrap());
+        result = Some(clients_guard.get(&opponent_username).cloned().unwrap());
       }
 
       result
@@ -374,7 +403,7 @@ impl Server {
 
     // Check if it's their move
     let mut invalid = false;
-    if (current_match.ledger.is_empty() && current_match.player1 != addr)
+    if (current_match.ledger.is_empty() && current_match.player1 != username)
       || (current_match.ledger.last().is_some()
         && current_match.ledger.last().unwrap().0 == client.color)
     {
@@ -404,7 +433,6 @@ impl Server {
     if invalid {
       let current_match_id = current_match.id;
       let is_demo_mode = current_match.demo_mode;
-      let viewers = current_match.viewers.clone();
 
       drop(current_match);
       drop(matches_guard);
@@ -420,22 +448,27 @@ impl Server {
 
         let _ = send(&tx, "GAME:LOSS");
         let _ = send(&opponent.connection, "GAME:WINS");
-        self.broadcast_message(&viewers, &format!("GAME:WIN:{}", opponent.username)).await;
+        self
+          .broadcast(&format!(
+            "GAME:{}:WIN:{}",
+            current_match_id, opponent.username
+          ))
+          .await;
 
         opponent.current_match = None;
         opponent.color = Color::None;
-        let opponent_addr = opponent.addr;
+        let opponent_username = opponent.username.clone();
         drop(opponent);
 
         let mut clients_guard = self.clients.write().await;
-        let mut client = clients_guard.get_mut(&addr).unwrap().write().await;
+        let mut client = clients_guard.get_mut(&username).unwrap().write().await;
         client.current_match = None;
         client.color = Color::None;
         drop(client);
 
         let mut tournament_guard = self.tournament.write().await;
         let tourney = tournament_guard.as_mut().unwrap();
-        tourney.write().await.inform_winner(opponent_addr, false);
+        tourney.write().await.inform_winner(opponent_username, false);
         drop(tournament_guard);
 
         self.matches.write().await.remove(&current_match_id).unwrap();
@@ -449,10 +482,11 @@ impl Server {
       timeout_thread.abort();
     }
 
-    let mut viewer_messages = Vec::new();
-    let viewers = current_match.viewers.clone();
-
-    viewer_messages.push(format!("GAME:MOVE:{}:{}", client.username, column));
+    let mut observer_messages = Vec::new();
+    observer_messages.push(format!(
+      "GAME:{}:MOVE:{}:{}",
+      current_match.id, client.username, column
+    ));
 
     // Check game end conditions
     let (winner, filled) = current_match.end_game_check();
@@ -465,7 +499,7 @@ impl Server {
         let opponent = opponent.read().await;
         let _ = send(&opponent.connection, "GAME:LOSS");
       }
-      viewer_messages.push(format!("GAME:WIN:{}", client.username));
+      observer_messages.push(format!("GAME:{}:WIN:{}", current_match.id, client.username));
     } else if filled {
       let _ = send(&tx, "GAME:DRAW");
       if !current_match.demo_mode {
@@ -473,11 +507,15 @@ impl Server {
         let opponent = opponent.read().await;
         let _ = send(&opponent.connection, "GAME:DRAW");
       }
-      viewer_messages.push("GAME:DRAW".to_string());
+      observer_messages.push(format!("GAME:{}:DRAW", current_match.id));
     }
 
     // remove match from matchmaker
     if winner != Color::None || filled {
+      for msg in observer_messages {
+        self.broadcast(&msg).await;
+      }
+
       let current_match_id = current_match.id;
       let is_demo_mode = current_match.demo_mode;
 
@@ -486,7 +524,7 @@ impl Server {
       drop(clients_guard);
 
       let clients_guard = self.clients.read().await;
-      let mut client = clients_guard.get(&addr).unwrap().write().await;
+      let mut client = clients_guard.get(&username).unwrap().write().await;
       client.current_match = None;
       client.color = Color::None;
       drop(client);
@@ -507,7 +545,7 @@ impl Server {
 
         let mut tournament_guard = self.tournament.write().await;
         let tourney = tournament_guard.as_mut().unwrap();
-        tourney.write().await.inform_winner(addr, filled);
+        tourney.write().await.inform_winner(username.clone(), filled);
         tourney.write().await.next(&self).await;
         if tourney.read().await.is_completed() {
           *tournament_guard = None;
@@ -548,6 +586,7 @@ impl Server {
     let observers = self.observers.clone();
     let opponent_move = opponent.clone();
     let client_tx = tx.clone();
+    let wait_match_id = current_match.id;
     if current_match.demo_mode {
       current_match.ledger.push((!client.color, demo_move, Instant::now()));
       current_match.place_token(!client.color, demo_move);
@@ -565,19 +604,21 @@ impl Server {
         );
       }
 
-      for msg in viewer_messages {
-        broadcast_message(&observers, &viewers, &msg).await;
+      for msg in observer_messages {
+        broadcast_message(&observers, &msg).await;
       }
 
       if demo_mode && no_winner {
         tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
         let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
-        broadcast_message(
-          &observers,
-          &viewers,
-          &format!("GAME:MOVE:{}:{}", SERVER_PLAYER_USERNAME, demo_move),
-        )
-        .await;
+        let observers_guard = observers.read().await;
+        let msg = format!(
+          "GAME:{}:MOVE:{}:{}",
+          wait_match_id, SERVER_PLAYER_USERNAME, demo_move
+        );
+        for (_, tx) in observers_guard.iter() {
+          let _ = send(tx, &msg);
+        }
       }
     }));
 
@@ -589,9 +630,7 @@ impl Server {
     let ledger_size = current_match.ledger.len();
     let client_username = client.username.clone();
     let client_tx = tx.clone();
-    let client_addr = addr.clone();
     let observers = self.observers.clone();
-    let viewers = current_match.viewers.clone();
     let opponent_move = opponent.clone();
     current_match.timeout_thread = Some(tokio::spawn(async move {
       if demo_mode {
@@ -611,15 +650,14 @@ impl Server {
           let opponent = opponent.read().await;
           let _ = send(&opponent.connection, "GAME:LOSS");
           drop(opponent);
-          broadcast_message(
-            &observers,
-            &viewers,
-            &format!("GAME:WIN:{}", client_username),
-          )
-          .await;
+          let observers_guard = observers.read().await;
+          let msg = format!("GAME:{}:WIN:{}", match_id, client_username);
+          for (_, tx) in observers_guard.iter() {
+            let _ = send(tx, &msg);
+          }
 
           let mut clients_guard = clients.write().await;
-          let mut client = clients_guard.get_mut(&client_addr).unwrap().write().await;
+          let mut client = clients_guard.get_mut(&client_username).unwrap().write().await;
           client.current_match = None;
           client.color = Color::None;
           drop(client);
@@ -632,7 +670,7 @@ impl Server {
 
           let mut tournament_guard = tournament.write().await;
           let tourney = tournament_guard.as_mut().unwrap();
-          tourney.write().await.inform_winner(client_addr, false);
+          tourney.write().await.inform_winner(client_username, false);
           drop(tournament_guard);
 
           matches.write().await.remove(&match_id).unwrap();
@@ -672,26 +710,15 @@ impl Server {
   }
 
   pub async fn handle_game_list(&self, tx: UnboundedSender<Message>) -> Result<(), anyhow::Error> {
-    let clients_guard = self.clients.read().await;
     let matches_guard = self.matches.read().await;
     let mut to_send = "GAME:LIST:".to_string();
     for match_guard in matches_guard.values() {
       let a_match = match_guard.read().await;
-      let player1 = if a_match.player1.to_string() == SERVER_PLAYER_ADDR {
-        SERVER_PLAYER_USERNAME.to_string()
-      } else {
-        clients_guard.get(&a_match.player1).unwrap().read().await.username.clone()
-      };
-      let player2 = if a_match.player2.to_string() == SERVER_PLAYER_ADDR {
-        SERVER_PLAYER_USERNAME.to_string()
-      } else {
-        clients_guard.get(&a_match.player2).unwrap().read().await.username.clone()
-      };
       to_send += a_match.id.to_string().as_str();
       to_send += ",";
-      to_send += player1.as_str();
+      to_send += a_match.player1.as_str();
       to_send += ",";
-      to_send += player2.as_str();
+      to_send += a_match.player2.as_str();
       to_send += "|";
     }
 
@@ -707,32 +734,16 @@ impl Server {
     &self,
     tx: UnboundedSender<Message>,
     match_id: u32,
-    addr: SocketAddr,
+    _addr: SocketAddr,
   ) -> Result<(), anyhow::Error> {
-    let result = self.watch(match_id, addr).await;
-    if result.is_err() {
-      return Err(anyhow::anyhow!("ERROR:INVALID:WATCH"));
-    }
-
-    let clients_guard = self.clients.read().await;
     let matches_guard = self.matches.read().await;
     let the_match = matches_guard.get(&match_id).unwrap().read().await;
 
-    let player1 = if !the_match.player1.to_string().eq(SERVER_PLAYER_ADDR) {
-      clients_guard.get(&the_match.player1).unwrap().read().await.username.clone()
-    } else {
-      SERVER_PLAYER_USERNAME.to_string()
-    };
-
-    let player2 = if !the_match.player2.to_string().eq(SERVER_PLAYER_ADDR) {
-      clients_guard.get(&the_match.player2).unwrap().read().await.username.clone()
-    } else {
-      SERVER_PLAYER_USERNAME.to_string()
-    };
+    let player1 = the_match.player1.clone();
+    let player2 = the_match.player2.clone();
 
     let ledger = the_match.ledger.clone();
 
-    drop(clients_guard);
     drop(the_match);
     drop(matches_guard);
 
@@ -781,17 +792,15 @@ impl Server {
       return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
     }
 
-    let usernames_guard = self.usernames.read().await;
     let clients_guard = self.clients.read().await;
 
-    let kick_addr_result = usernames_guard.get(&kick_username);
-    match kick_addr_result {
-      Some(kick_addr) => {
-        let kick_client = clients_guard.get(kick_addr).unwrap().read().await;
-        kick_client.connection.send(Message::Close(None))?;
-      }
-      None => return Err(anyhow::anyhow!("ERROR:INVALID:KICK")),
+    let kick_client = clients_guard.get(&kick_username).cloned();
+    if let Some(client) = kick_client {
+      client.read().await.connection.send(Message::Close(None))?;
+    } else {
+      return Err(anyhow::anyhow!("ERROR:INVALID:KICK"));
     }
+
     Ok(())
   }
 
@@ -862,7 +871,7 @@ impl Server {
       timeout_thread.abort();
     }
 
-    self.broadcast_message(&the_match.viewers, &format!("GAME:WIN:{}", winner_username)).await;
+    self.broadcast(&format!("GAME:{}:WIN:{}", match_id, winner_username)).await;
 
     let clients_guard = self.clients.read().await;
     if the_match.demo_mode {
@@ -871,7 +880,7 @@ impl Server {
       } else {
         "LOSS"
       };
-      let mut the_player = if the_match.player1 != SERVER_PLAYER_ADDR.parse()? {
+      let mut the_player = if the_match.player1 != SERVER_PLAYER_USERNAME {
         clients_guard.get(&the_match.player1).unwrap().write().await
       } else {
         clients_guard.get(&the_match.player2).unwrap().write().await
@@ -907,12 +916,6 @@ impl Server {
       player2.connection.clone()
     };
 
-    let winner_addr = if player1.username == winner_username {
-      player1.addr.clone()
-    } else {
-      player2.addr.clone()
-    };
-
     drop(player1);
     drop(player2);
     drop(clients_guard);
@@ -923,7 +926,7 @@ impl Server {
     if self.tournament.read().await.is_some() {
       let mut tournament_guard = self.tournament.write().await;
       let tourney = tournament_guard.as_mut().unwrap();
-      tourney.write().await.inform_winner(winner_addr, false);
+      tourney.write().await.inform_winner(winner_username, false);
       if self.matches.read().await.is_empty() {
         tourney.write().await.next(&self).await;
         if tourney.read().await.is_completed() {
@@ -953,9 +956,9 @@ impl Server {
 
     let mut clients_guard = self.clients.write().await;
     let mut ready_players = Vec::new();
-    for (client_addr, client_guard) in clients_guard.iter_mut() {
+    for (username, client_guard) in clients_guard.iter_mut() {
       if client_guard.read().await.ready {
-        ready_players.push(*client_addr);
+        ready_players.push(username.clone());
       }
     }
 
@@ -977,7 +980,7 @@ impl Server {
     // Clear any pending reservations when a tournament starts
     self.reservations.write().await.clear();
 
-    self.broadcast_message_all_observers(&format!("TOURNAMENT:START:{}", tournament_type)).await;
+    self.broadcast(&format!("TOURNAMENT:START:{}", tournament_type)).await;
     Ok(())
   }
 
@@ -995,7 +998,7 @@ impl Server {
     tourney.write().await.cancel(&self).await;
     *tournament_guard = None;
 
-    self.broadcast_message_all_observers("TOURNAMENT:CANCEL").await;
+    self.broadcast("TOURNAMENT:CANCEL").await;
     Ok(())
   }
 
@@ -1091,27 +1094,29 @@ impl Server {
       &format!("RESERVATION:ADD:{},{}", player1_username, player2_username),
     );
 
-    let player1_addr = self.usernames.read().await.get(&player1_username).cloned();
-    let player2_addr = self.usernames.read().await.get(&player2_username).cloned();
-
     let clients_guard = self.clients.read().await;
-    if player1_addr.is_some() && player2_addr.is_some() {
-      let mut player1 = clients_guard.get(&player1_addr.unwrap()).unwrap().write().await;
-      let mut player2 = clients_guard.get(&player2_addr.unwrap()).unwrap().write().await;
+    let player1 = clients_guard.get(&player1_username).cloned();
+    let player2 = clients_guard.get(&player2_username).cloned();
+
+    if player1.is_some() && player2.is_some() {
+      let player1 = player1.unwrap();
+      let player2 = player2.unwrap();
+      let mut player1 = player1.write().await;
+      let mut player2 = player2.write().await;
 
       if player1.ready && player2.ready {
         let match_id: u32 = gen_match_id(&self.matches).await;
         let new_match = Arc::new(RwLock::new(Match::new(
           match_id,
-          player1_addr.unwrap(),
-          player2_addr.unwrap(),
+          player1_username.clone(),
+          player2_username.clone(),
           false,
         )));
         self.matches.write().await.insert(match_id, new_match.clone());
 
         player1.ready = false;
         player1.current_match = Some(match_id);
-        player1.color = if new_match.read().await.player1 == player1_addr.unwrap() {
+        player1.color = if new_match.read().await.player1 == player1_username {
           let _ = send(&tx, "GAME:START:1");
           let _ = send(&player2.connection, "GAME:START:0");
           Color::Red
@@ -1186,54 +1191,6 @@ impl Server {
     Ok(())
   }
 
-  pub async fn watch(&self, new_match_id: u32, addr: SocketAddr) -> Result<(), String> {
-    let matches_guard = self.matches.read().await;
-
-    for match_guard in matches_guard.values() {
-      let mut found = false;
-      let mut a_match = match_guard.write().await;
-      for i in 0..a_match.viewers.len() {
-        if a_match.viewers[i] == addr {
-          a_match.viewers.remove(i);
-          found = true;
-          break;
-        }
-      }
-
-      if found {
-        break;
-      }
-    }
-
-    let result = matches_guard.get(&new_match_id);
-    if result.is_none() {
-      return Err("Match not found".to_string());
-    }
-    result.unwrap().write().await.viewers.push(addr);
-
-    Ok(())
-  }
-
-  pub async fn remove_observer_from_all_matches(&self, addr: SocketAddr) {
-    let matches_guard = self.matches.read().await;
-
-    for match_guard in matches_guard.values() {
-      let mut found = false;
-      let mut a_match = match_guard.write().await;
-      for i in 0..a_match.viewers.len() {
-        if a_match.viewers[i] == addr {
-          a_match.viewers.remove(i);
-          found = true;
-          break;
-        }
-      }
-
-      if found {
-        break;
-      }
-    }
-  }
-
   pub async fn terminate_match(&self, match_id: u32) {
     let matches_guard = self.matches.read().await;
     let the_match = matches_guard.get(&match_id);
@@ -1253,17 +1210,17 @@ impl Server {
       timeout_thread.abort();
     }
 
-    self.broadcast_message(&the_match.viewers, "GAME:TERMINATED").await;
+    self.broadcast(&format!("GAME:{}:TERMINATED", the_match.id)).await;
 
     let clients_guard = self.clients.read().await;
-    if the_match.player1 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
+    if the_match.player1 != SERVER_PLAYER_USERNAME.to_string() {
       let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
       let _ = send(&player1.connection, "GAME:TERMINATED");
       player1.current_match = None;
       player1.color = Color::None;
     }
 
-    if the_match.player2 != SERVER_PLAYER_ADDR.to_string().parse().unwrap() {
+    if the_match.player2 != SERVER_PLAYER_USERNAME.to_string() {
       let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
       let _ = send(&player2.connection, "GAME:TERMINATED");
       player2.current_match = None;
@@ -1277,20 +1234,9 @@ impl Server {
     self.matches.write().await.remove(&match_id);
   }
 
-  pub async fn broadcast_message(&self, addrs: &Vec<SocketAddr>, msg: &str) {
-    for addr in addrs {
-      let observers_guard = self.observers.read().await;
-      let tx = observers_guard.get(addr);
-      if tx.is_none() {
-        continue;
-      }
-      let _ = send(tx.unwrap(), msg);
-    }
-  }
-
-  pub async fn broadcast_message_all_observers(&self, msg: &str) {
+  pub async fn broadcast(&self, msg: &str) {
     let observers_guard = self.observers.read().await;
-    for (_, tx) in observers_guard.iter() {
+    for tx in observers_guard.values() {
       let _ = send(tx, msg);
     }
   }
@@ -1302,24 +1248,24 @@ impl Server {
     true
   }
 
-  pub async fn find_reservation_opponent(&self, username: String) -> Option<SocketAddr> {
+  pub async fn find_reservation_opponent(&self, username: &String) -> Option<String> {
     let reservations_guard = self.reservations.read().await;
     for (player1, player2) in reservations_guard.iter() {
-      if player1 == &username || player2 == &username {
-        let opponent_username = if player1 == &username {
+      if player1 == username || player2 == username {
+        let opponent_username = if player1 == username {
           player2
         } else {
           player1
         };
 
         let usernames_guard = self.usernames.read().await;
-        if let Some(opponent_addr) = usernames_guard.get(opponent_username) {
-          let clients_guard = self.clients.read().await;
-          let opponent = clients_guard.get(opponent_addr).unwrap().read().await;
-          if opponent.ready {
-            return Some(*opponent_addr);
+        return usernames_guard.iter().find_map(|(_, client_username)| {
+          if client_username == opponent_username {
+            Some(opponent_username.clone())
+          } else {
+            None
           }
-        }
+        });
       }
     }
 

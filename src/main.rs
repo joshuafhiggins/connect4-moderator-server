@@ -49,10 +49,7 @@ async fn handle_connection(
 
   let ws_stream = accept_async(stream).await?;
   let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-  let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-  // Store the client
-  sd.observers.write().await.insert(addr, tx.clone());
+  let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
 
   // Spawn task to handle outgoing messages
   let send_task = tokio::spawn(async move {
@@ -96,6 +93,12 @@ async fn handle_connection(
           "DISCONNECT" => {
             if let Err(e) = sd.handle_disconnect_cmd(addr, tx.clone()).await {
               error!("handle_disconnect: {}", e);
+              let _ = send(&tx, e.to_string().as_str());
+            }
+          }
+          "OBSERVE" => {
+            if let Err(e) = sd.handle_observe(addr, tx.clone()).await {
+              error!("handle_observe: {}", e);
               let _ = send(&tx, e.to_string().as_str());
             }
           }
@@ -303,24 +306,28 @@ async fn handle_connection(
   // Remove and terminate any matches
   // We may not be a client disconnecting, do this check
   let clients_guard = sd.clients.read().await;
-  if clients_guard.get(&addr).is_some() {
-    let client = clients_guard.get(&addr).unwrap().read().await;
-    let username = client.username.clone();
-    let tournament_guard = sd.tournament.read().await;
-    if client.current_match.is_some() {
-      sd.disconnected_clients.write().await.push(username.clone());
-    } else if tournament_guard.is_some() {
-      let tourney = tournament_guard.clone().unwrap();
-      if tourney.read().await.contains_player(addr) {
+  for client in clients_guard.values() {
+    let client = client.read().await;
+    if client.addr == addr {
+      let username = client.username.clone();
+      let tournament_guard = sd.tournament.read().await;
+      if client.current_match.is_some() {
         sd.disconnected_clients.write().await.push(username.clone());
+      } else if tournament_guard.is_some() {
+        let tourney = tournament_guard.clone().unwrap();
+        if tourney.read().await.contains_player(username.clone()) {
+          sd.disconnected_clients.write().await.push(username.clone());
+        }
       }
+
+      drop(client);
+      drop(clients_guard);
+
+      sd.clients.write().await.remove(&username);
+      sd.usernames.write().await.remove(&addr);
+
+      break;
     }
-
-    drop(client);
-    drop(clients_guard);
-
-    sd.clients.write().await.remove(&addr);
-    sd.usernames.write().await.remove(&username);
   }
 
   sd.observers.write().await.remove(&addr);

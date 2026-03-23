@@ -17,24 +17,20 @@ pub mod server;
 pub mod tournaments;
 pub mod types;
 
-pub type Clients = Arc<RwLock<HashMap<SocketAddr, Arc<RwLock<Client>>>>>;
-pub type Usernames = Arc<RwLock<HashMap<String, SocketAddr>>>;
+pub type Clients = Arc<RwLock<HashMap<String, Arc<RwLock<Client>>>>>;
+pub type Usernames = Arc<RwLock<HashMap<SocketAddr, String>>>;
 pub type Observers = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Message>>>>;
 pub type Matches = Arc<RwLock<HashMap<u32, Arc<RwLock<Match>>>>>;
 pub type Reservations = Arc<RwLock<Vec<(String, String)>>>;
 pub type WrappedTournament = Arc<RwLock<Option<Arc<RwLock<dyn Tournament + Send + Sync>>>>>;
 
 pub const SERVER_PLAYER_USERNAME: &str = "The Server";
-pub const SERVER_PLAYER_ADDR: &str = "127.0.0.1:6666";
+// pub const SERVER_PLAYER_ADDR: &str = "127.0.0.1:6666";
 
-pub async fn broadcast_message(observers: &Observers, addrs: &Vec<SocketAddr>, msg: &str) {
-  for addr in addrs {
-    let observers_guard = observers.read().await;
-    let tx = observers_guard.get(addr);
-    if tx.is_none() {
-      continue;
-    }
-    let _ = send(tx.unwrap(), msg);
+pub async fn broadcast_message(observers: &Observers, msg: &str) {
+  let observer_guard = observers.read().await;
+  for tx in observer_guard.values() {
+    let _ = send(tx, msg);
   }
 }
 
