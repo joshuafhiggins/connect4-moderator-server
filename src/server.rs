@@ -429,6 +429,9 @@ impl Server {
       invalid = true;
     }
 
+    let player1 = current_match.player1.clone();
+    let player2 = current_match.player2.clone();
+
     // Terminate games if a player makes an invalid move
     if invalid {
       let current_match_id = current_match.id;
@@ -468,7 +471,16 @@ impl Server {
 
         let mut tournament_guard = self.tournament.write().await;
         let tourney = tournament_guard.as_mut().unwrap();
-        tourney.write().await.inform_winner(opponent_username, false);
+        tourney
+          .write()
+          .await
+          .inform_winner(
+            opponent_username,
+            current_match_id,
+            player1.clone(),
+            player2.clone(),
+          )
+          .await;
         drop(tournament_guard);
 
         self.matches.write().await.remove(&current_match_id).unwrap();
@@ -539,32 +551,55 @@ impl Server {
 
       matches_guard.remove(&current_match_id).unwrap();
 
-      if self.tournament.read().await.is_some() && matches_guard.is_empty() {
-        drop(matches_guard);
-        drop(clients_guard);
-
+      if self.tournament.read().await.is_some() {
         let mut tournament_guard = self.tournament.write().await;
         let tourney = tournament_guard.as_mut().unwrap();
-        tourney.write().await.inform_winner(username.clone(), filled);
-        tourney.write().await.next(&self).await;
-        if tourney.read().await.is_completed() {
-          *tournament_guard = None;
-        }
-      } else if self.tournament.read().await.is_none() {
-        let _ = send(&tx, "TOURNAMENT:END");
-        if !is_demo_mode {
-          let opponent = opponent.clone().unwrap();
-          let opponent = opponent.read().await;
-          let _ = send(&opponent.connection, "TOURNAMENT:END");
+        let winner = if filled {
+          String::new()
+        } else {
+          username.clone()
+        };
+
+        tourney
+          .write()
+          .await
+          .inform_winner(winner, current_match_id, player1.clone(), player2.clone())
+          .await;
+
+        if matches_guard.is_empty() {
+          drop(matches_guard);
+          drop(clients_guard);
+
+          tourney.write().await.next(&self).await;
+          if tourney.read().await.is_completed() {
+            let tournament_players = tourney.read().await.get_players();
+            let clients_guard = self.clients.read().await;
+
+            for player in tournament_players {
+              let player = clients_guard.get(&player);
+
+              if player.is_none() {
+                continue;
+              }
+
+              let player = player.unwrap().read().await;
+              let _ = send(&player.connection, "TOURNAMENT:END");
+            }
+
+            *tournament_guard = None;
+
+            self.broadcast("TOURNAMENT:END").await;
+          }
         }
       }
 
       return Ok(());
     }
 
-    let default_waiting_time = *self.waiting_timeout.read().await;
-    let mut adjusted_waiting =
-      default_waiting_time as i64 + (rand::rng().random_range(0..=50) - 25);
+    let set_waiting_time = *self.waiting_timeout.read().await;
+    let mut variance = rand::rng().random_range(0..=(set_waiting_time / 200)) as i64;
+    variance *= rand::rng().random_range(0..=2) - 1;
+    let mut adjusted_waiting = set_waiting_time as i64 + variance;
     let current_move_time = Instant::now();
 
     if current_match.ledger.is_empty() {
@@ -609,7 +644,7 @@ impl Server {
       }
 
       if demo_mode && no_winner {
-        tokio::time::sleep(tokio::time::Duration::from_millis(default_waiting_time)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(set_waiting_time)).await;
         let _ = send(&client_tx, &format!("OPPONENT:{}", demo_move));
         let observers_guard = observers.read().await;
         let msg = format!(
@@ -640,7 +675,8 @@ impl Server {
       tokio::time::sleep(tokio::time::Duration::from_millis(max_timeout as u64)).await;
 
       let matches_guard = matches.read().await;
-      let the_match = matches_guard.get(&match_id);
+      let the_match = matches_guard.get(&match_id).cloned();
+      drop(matches_guard);
       if let Some(the_match) = the_match {
         let the_match = the_match.read().await;
         if the_match.ledger.len() == ledger_size {
@@ -670,7 +706,7 @@ impl Server {
 
           let mut tournament_guard = tournament.write().await;
           let tourney = tournament_guard.as_mut().unwrap();
-          tourney.write().await.inform_winner(client_username, false);
+          tourney.write().await.inform_winner(client_username, match_id, player1, player2).await;
           drop(tournament_guard);
 
           matches.write().await.remove(&match_id).unwrap();
@@ -820,7 +856,23 @@ impl Server {
       let tourney = tournament_guard.as_mut().unwrap();
       tourney.write().await.next(&self).await;
       if tourney.read().await.is_completed() {
+        let tournament_players = tourney.read().await.get_players();
+        let clients_guard = self.clients.read().await;
+
+        for player in tournament_players {
+          let player = clients_guard.get(&player);
+
+          if player.is_none() {
+            continue;
+          }
+
+          let player = player.unwrap().read().await;
+          let _ = send(&player.connection, "TOURNAMENT:END");
+        }
+
         *tournament_guard = None;
+
+        self.broadcast("TOURNAMENT:END").await;
       }
     }
     Ok(())
@@ -926,11 +978,36 @@ impl Server {
     if self.tournament.read().await.is_some() {
       let mut tournament_guard = self.tournament.write().await;
       let tourney = tournament_guard.as_mut().unwrap();
-      tourney.write().await.inform_winner(winner_username, false);
+      tourney
+        .write()
+        .await
+        .inform_winner(
+          winner_username,
+          match_id,
+          the_match.player1.clone(),
+          the_match.player2.clone(),
+        )
+        .await;
       if self.matches.read().await.is_empty() {
         tourney.write().await.next(&self).await;
         if tourney.read().await.is_completed() {
+          let tournament_players = tourney.read().await.get_players();
+          let clients_guard = self.clients.read().await;
+
+          for player in tournament_players {
+            let player = clients_guard.get(&player);
+
+            if player.is_none() {
+              continue;
+            }
+
+            let player = player.unwrap().read().await;
+            let _ = send(&player.connection, "TOURNAMENT:END");
+          }
+
           *tournament_guard = None;
+
+          self.broadcast("TOURNAMENT:END").await;
         }
       }
     } else {
@@ -968,14 +1045,26 @@ impl Server {
 
     drop(clients_guard);
 
-    let mut tourney = match tournament_type.as_str() {
-      "RoundRobin" => RoundRobin::new(&ready_players),
-      &_ => RoundRobin::new(&ready_players),
-    };
-    tourney.start(&self).await;
+    let tourney: Option<Arc<RwLock<dyn Tournament + Send + Sync + 'static>>> =
+      match tournament_type.as_str() {
+        "RoundRobin" => Some(Arc::new(RwLock::new(
+          RoundRobin::new(&ready_players, &self).await,
+        ))),
+        "KnockoutBracket" => Some(Arc::new(RwLock::new(
+          KnockoutBracket::new(&ready_players, &self).await,
+        ))),
+        &_ => None,
+      };
+
+    if tourney.is_none() {
+      return Err(anyhow::anyhow!("ERROR:INVALID:TOURNAMENT"));
+    }
+
+    let tourney = tourney.unwrap();
+    tourney.write().await.start(&self).await;
 
     let mut tournament_guard = self.tournament.write().await;
-    *tournament_guard = Some(Arc::new(RwLock::new(tourney)));
+    *tournament_guard = Some(tourney);
 
     // Clear any pending reservations when a tournament starts
     self.reservations.write().await.clear();

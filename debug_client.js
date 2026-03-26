@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 const readline = require("readline");
 
-const DEFAULT_URL = "wss://connect4.abunchofknowitalls.com";
+const DEFAULT_URL = "ws://localhost:8080";
 
 let ws;
 let pingInterval;

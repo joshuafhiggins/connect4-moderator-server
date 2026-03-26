@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use tracing::info;
 
 use crate::{server::Server, *};
 
@@ -12,11 +13,13 @@ pub struct RoundRobin {
   pub players: HashMap<ID, (String, Score)>,
   pub top_half: Vec<ID>,
   pub bottom_half: Vec<ID>,
-  pub is_completed: bool,
+  pub completed: bool,
+  pub current_matches: Vec<ID>,
+  pub usernames: Vec<String>,
 }
 
 impl RoundRobin {
-  async fn create_matches(&self, clients: &Clients, matches: &Matches) {
+  async fn create_matches(&mut self, clients: &Clients, matches: &Matches) {
     let clients_guard = clients.read().await;
     for (i, id) in self.top_half.iter().enumerate() {
       let player1_username = self.players.get(id).unwrap();
@@ -34,6 +37,8 @@ impl RoundRobin {
         player2_addr.0.clone(),
         false,
       )));
+
+      self.current_matches.push(match_id.clone());
 
       let match_guard = new_match.read().await;
       let mut player1 = clients_guard.get(&player1_username.0).unwrap().write().await;
@@ -73,12 +78,14 @@ impl RoundRobin {
 
 #[async_trait]
 impl Tournament for RoundRobin {
-  fn new(ready_players: &[String]) -> RoundRobin {
+  async fn new(ready_players: &[String], _: &Server) -> RoundRobin {
     let mut result = RoundRobin {
       players: HashMap::new(),
       top_half: Vec::new(),
       bottom_half: Vec::new(),
-      is_completed: false,
+      completed: false,
+      current_matches: Vec::new(),
+      usernames: ready_players.to_vec(),
     };
 
     let size = ready_players.len();
@@ -98,8 +105,10 @@ impl Tournament for RoundRobin {
     result
   }
 
-  fn inform_winner(&mut self, winner: String, is_tie: bool) {
-    if is_tie {
+  async fn inform_winner(&mut self, winner: String, match_id: u32, _: String, _: String) {
+    info!("RoundRobin: told winner was \"{}\"", winner);
+
+    if winner.is_empty() {
       return;
     }
 
@@ -109,24 +118,17 @@ impl Tournament for RoundRobin {
         break;
       }
     }
-  }
 
-  fn contains_player(&self, username: String) -> bool {
-    for (_, (player_username, _)) in self.players.iter() {
-      if *player_username == username {
-        return true;
-      }
-    }
-    false
+    self.current_matches.retain(|id| !(*id == match_id));
   }
 
   async fn next(&mut self, server: &Server) {
-    if self.is_completed {
+    if self.completed {
       return;
     }
 
     if self.top_half.len() <= 1 || self.bottom_half.is_empty() {
-      self.is_completed = true;
+      self.completed = true;
       return;
     }
 
@@ -138,20 +140,20 @@ impl Tournament for RoundRobin {
 
     let expected_bottom_start = self.top_half.len() as u32;
     if self.top_half[1] == 1 && self.bottom_half[0] == expected_bottom_start {
-      self.is_completed = true;
+      self.completed = true;
     }
 
     let clients_guard = server.clients.read().await;
     let mut player_scores: Vec<(String, u32)> = Vec::new();
     for (_, player_addr) in self.players.iter() {
       let player = clients_guard.get(&player_addr.0).unwrap().read().await;
-      let _ = send(&player.connection.clone(), "TOURNAMENT:END");
       player_scores.push((player.username.clone(), player_addr.1));
     }
     drop(clients_guard);
 
     player_scores.sort_by(|a, b| b.1.cmp(&a.1));
 
+    // Send scores
     let mut message = "TOURNAMENT:SCORES:".to_string();
     for (player, score) in player_scores.iter() {
       message.push_str(&format!("{},{}|", player, score))
@@ -160,15 +162,7 @@ impl Tournament for RoundRobin {
 
     server.broadcast(&message).await;
 
-    if self.is_completed() {
-      // Send scores
-      let clients_guard = server.clients.read().await;
-      for (_, player_addr) in self.players.iter() {
-        let player = clients_guard.get(&player_addr.0).unwrap().read().await;
-        let _ = send(&player.connection.clone(), "TOURNAMENT:END");
-      }
-    } else {
-      // Create next matches
+    if !self.is_completed() {
       self.create_matches(&server.clients, &server.matches).await;
     }
   }
@@ -178,36 +172,32 @@ impl Tournament for RoundRobin {
   }
 
   async fn cancel(&mut self, server: &Server) {
-    for (_, addr) in self.players.iter() {
-      let clients_guard = server.clients.read().await;
+    for match_id in &self.current_matches {
+      server.terminate_match(*match_id).await;
+    }
 
-      let client = clients_guard.get(&addr.0);
+    let clients_guard = server.clients.read().await;
+    for (_, (username, _)) in self.players.iter() {
+      let client = clients_guard.get(username);
       if client.is_none() {
         continue;
       }
+
       let client = client.unwrap().read().await;
-      let client_connection = client.connection.clone();
-      let client_ready = client.ready;
-
-      let match_id = client.current_match;
-      if match_id.is_none() {
-        continue;
-      }
-      let match_id = match_id.unwrap();
-
-      drop(client);
-      drop(clients_guard);
-
-      server.terminate_match(match_id).await;
-
-      if !client_ready {
-        let _ = send(&client_connection, "TOURNAMENT:END");
-      }
+      let _ = send(&client.connection, "TOURNAMENT:END");
     }
   }
 
+  fn contains_player(&self, username: String) -> bool {
+    self.usernames.contains(&username)
+  }
+
   fn is_completed(&self) -> bool {
-    self.is_completed
+    self.completed
+  }
+
+  fn get_players(&self) -> Vec<String> {
+    self.usernames.clone()
   }
 
   fn get_type(&self) -> String {
