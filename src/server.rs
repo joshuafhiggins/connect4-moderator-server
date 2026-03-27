@@ -44,14 +44,21 @@ impl Server {
   ) -> Result<(), anyhow::Error> {
     if requested_username.is_empty() {
       return Err(anyhow::anyhow!(format!(
-        "ERROR:INVALID:ID:{}",
+        "ERROR:INVALID:CONNECT:{}",
+        requested_username
+      )));
+    }
+
+    if requested_username.chars().any(|c| matches!(c, ':' | ',' | '|') || c.is_control()) {
+      return Err(anyhow::anyhow!(format!(
+        "ERROR:INVALID:CONNECT:{}",
         requested_username
       )));
     }
 
     if requested_username == SERVER_PLAYER_USERNAME {
       return Err(anyhow::anyhow!(format!(
-        "ERROR:INVALID:ID:{}",
+        "ERROR:INVALID:CONNECT:{}",
         requested_username
       )));
     }
@@ -66,7 +73,7 @@ impl Server {
     let existing_client = clients_guard.get(&requested_username).cloned();
     if existing_client.is_some() && !reconnecting {
       return Err(anyhow::anyhow!(format!(
-        "ERROR:INVALID:ID:{}",
+        "ERROR:INVALID:CONNECT:{}",
         requested_username
       )));
     }
@@ -81,11 +88,13 @@ impl Server {
       self.clients.write().await.insert(
         requested_username.clone(),
         Arc::new(RwLock::new(Client::new(
-          requested_username,
+          requested_username.clone(),
           tx.clone(),
           addr.to_string().parse()?,
         ))),
       );
+
+      self.broadcast(&format!("CONNECT:{}", requested_username)).await;
 
       return Ok(());
     }
@@ -217,6 +226,7 @@ impl Server {
     self.clients.write().await.remove(&username);
     self.usernames.write().await.remove(&addr);
     let _ = send(&tx, "DISCONNECT:ACK");
+    self.broadcast(&format!("DISCONNECT:{}", username)).await;
 
     Ok(())
   }
@@ -264,6 +274,7 @@ impl Server {
     let _ = send(&tx, "READY:ACK");
     drop(client);
     drop(clients_guard);
+    self.broadcast(&format!("READY:{}:{}", username, true)).await;
 
     if let Some(opponent_username) = self.find_reservation_opponent(&username).await {
       let clients_guard = self.clients.read().await;
@@ -278,6 +289,14 @@ impl Server {
         false,
       )));
       self.matches.write().await.insert(match_id, new_match.clone());
+      let match_guard = new_match.read().await;
+      self
+        .broadcast(&format!(
+          "GAME:START:{},{},{}",
+          match_id, match_guard.player1, match_guard.player2
+        ))
+        .await;
+      drop(match_guard);
 
       client.ready = false;
       client.current_match = Some(match_id);
@@ -294,12 +313,19 @@ impl Server {
       opponent.ready = false;
       opponent.current_match = Some(match_id);
       opponent.color = !client.color;
+      let opponent_username = opponent.username.clone();
 
       self
         .reservations
         .write()
         .await
         .retain(|(p1, p2)| !(p1 == &client.username && p2 == &opponent.username));
+
+      drop(opponent);
+      drop(client);
+      drop(clients_guard);
+      self.broadcast(&format!("READY:{}:{}", username, false)).await;
+      self.broadcast(&format!("READY:{}:{}", opponent_username, false)).await;
 
       return Ok(());
     }
@@ -316,6 +342,15 @@ impl Server {
         is_demo_mode,
       )));
       self.matches.write().await.insert(match_id, new_match.clone());
+      let match_guard = new_match.read().await;
+      self
+        .broadcast(&format!(
+          "GAME:START:{},{},{}",
+          match_id, match_guard.player1, match_guard.player2
+        ))
+        .await;
+      drop(match_guard);
+
       client.ready = false;
       client.current_match = Some(match_id);
       client.color = if new_match.read().await.player1 == username {
@@ -355,6 +390,9 @@ impl Server {
           }
         }));
       }
+
+      drop(client);
+      self.broadcast(&format!("READY:{}:{}", username, false)).await;
     }
 
     Ok(())
@@ -1202,8 +1240,17 @@ impl Server {
           false,
         )));
         self.matches.write().await.insert(match_id, new_match.clone());
+        let match_guard = new_match.read().await;
+        self
+          .broadcast(&format!(
+            "GAME:START:{},{},{}",
+            match_id, match_guard.player1, match_guard.player2
+          ))
+          .await;
+        drop(match_guard);
 
         player1.ready = false;
+        let player1_name = player1.username.clone();
         player1.current_match = Some(match_id);
         player1.color = if new_match.read().await.player1 == player1_username {
           let _ = send(&tx, "GAME:START:1");
@@ -1216,6 +1263,7 @@ impl Server {
         };
 
         player2.ready = false;
+        let player2_name = player2.username.clone();
         player2.current_match = Some(match_id);
         player2.color = !player1.color;
 
@@ -1224,6 +1272,12 @@ impl Server {
           .write()
           .await
           .retain(|(p1, p2)| !(p1 == &player1_username && p2 == &player2_username));
+
+        drop(player2);
+        drop(player1);
+        drop(clients_guard);
+        self.broadcast(&format!("READY:{}:{}", player1_name, false)).await;
+        self.broadcast(&format!("READY:{}:{}", player2_name, false)).await;
       }
     }
 

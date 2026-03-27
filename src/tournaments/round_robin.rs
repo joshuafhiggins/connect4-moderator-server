@@ -16,6 +16,7 @@ pub struct RoundRobin {
   pub completed: bool,
   pub current_matches: Vec<ID>,
   pub usernames: Vec<String>,
+  pub observers: Observers,
 }
 
 impl RoundRobin {
@@ -39,12 +40,16 @@ impl RoundRobin {
       )));
 
       self.current_matches.push(match_id.clone());
-
       let match_guard = new_match.read().await;
+      
       let mut player1 = clients_guard.get(&player1_username.0).unwrap().write().await;
-
       player1.current_match = Some(match_id);
       player1.ready = false;
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player1.username.clone(), false),
+      )
+      .await;
 
       if match_guard.player1 == player1_username.0 {
         player1.color = Color::Red;
@@ -53,13 +58,16 @@ impl RoundRobin {
         player1.color = Color::Yellow;
         let _ = send(&player1.connection, "GAME:START:0");
       }
-
       drop(player1);
 
       let mut player2 = clients_guard.get(&player2_addr.0).unwrap().write().await;
-
       player2.current_match = Some(match_id);
       player2.ready = false;
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player2.username.clone(), false),
+      )
+      .await;
 
       if match_guard.player1 == player2_addr.0 {
         player2.color = Color::Red;
@@ -68,17 +76,24 @@ impl RoundRobin {
         player2.color = Color::Yellow;
         let _ = send(&player2.connection, "GAME:START:0");
       }
-
       drop(player2);
 
       matches.write().await.insert(match_id, new_match.clone());
+      broadcast_message(
+        &self.observers,
+        &format!(
+          "GAME:START:{},{},{}",
+          match_id, match_guard.player1, match_guard.player2
+        ),
+      )
+      .await;
     }
   }
 }
 
 #[async_trait]
 impl Tournament for RoundRobin {
-  async fn new(ready_players: &[String], _: &Server) -> RoundRobin {
+  async fn new(ready_players: &[String], server: &Server) -> RoundRobin {
     let mut result = RoundRobin {
       players: HashMap::new(),
       top_half: Vec::new(),
@@ -86,6 +101,7 @@ impl Tournament for RoundRobin {
       completed: false,
       current_matches: Vec::new(),
       usernames: ready_players.to_vec(),
+      observers: server.observers.clone(),
     };
 
     let size = ready_players.len();

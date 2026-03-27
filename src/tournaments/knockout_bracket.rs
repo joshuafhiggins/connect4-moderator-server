@@ -19,6 +19,7 @@ pub struct KnockoutBracket {
   pub started: bool,
   pub clients: Clients,
   pub matches: Matches,
+  pub observers: Observers,
   pub usernames: Vec<String>,
 }
 
@@ -39,12 +40,16 @@ impl KnockoutBracket {
         player2_username.clone(),
         false,
       )));
-
       let match_guard = new_match.read().await;
-      let mut player1 = clients_guard.get(&player1_username).unwrap().write().await;
 
+      let mut player1 = clients_guard.get(&player1_username).unwrap().write().await;
       player1.current_match = Some(match_id);
       player1.ready = false;
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player1.username.clone(), false),
+      )
+      .await;
 
       if match_guard.player1 == player1_username {
         player1.color = Color::Red;
@@ -53,13 +58,16 @@ impl KnockoutBracket {
         player1.color = Color::Yellow;
         let _ = send(&player1.connection, "GAME:START:0");
       }
-
       drop(player1);
 
       let mut player2 = clients_guard.get(&player2_username).unwrap().write().await;
-
       player2.current_match = Some(match_id);
       player2.ready = false;
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player2.username.clone(), false),
+      )
+      .await;
 
       if match_guard.player1 == player2_username {
         player2.color = Color::Red;
@@ -68,10 +76,17 @@ impl KnockoutBracket {
         player2.color = Color::Yellow;
         let _ = send(&player2.connection, "GAME:START:0");
       }
-
       drop(player2);
 
       self.matches.write().await.insert(match_id, new_match.clone());
+      broadcast_message(
+        &self.observers,
+        &format!(
+          "GAME:START:{},{},{}",
+          match_id, match_guard.player1, match_guard.player2
+        ),
+      )
+      .await;
 
       i += 2
     }
@@ -95,6 +110,7 @@ impl Tournament for KnockoutBracket {
       started: false,
       clients: server.clients.clone(),
       matches: server.matches.clone(),
+      observers: server.observers.clone(),
       usernames: ready_players.to_vec(),
     }
   }
@@ -219,6 +235,7 @@ impl Tournament for KnockoutBracket {
 
       player1.current_match = Some(match_id);
       player1.ready = false;
+      let player1_name = player1.username.clone();
 
       if match_guard.player1 == player1.username {
         player1.color = Color::Red;
@@ -234,6 +251,7 @@ impl Tournament for KnockoutBracket {
 
       player2.current_match = Some(match_id);
       player2.ready = false;
+      let player2_name = player2.username.clone();
 
       if match_guard.player1 == player2.username {
         player2.color = Color::Red;
@@ -245,8 +263,27 @@ impl Tournament for KnockoutBracket {
 
       drop(player2);
 
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player1_name, false),
+      )
+      .await;
+      broadcast_message(
+        &self.observers,
+        &format!("READY:{}:{}", player2_name, false),
+      )
+      .await;
+
       self.current_matches.push(match_id);
       self.matches.write().await.insert(match_id, new_match.clone());
+      broadcast_message(
+        &self.observers,
+        &format!(
+          "GAME:START:{},{},{}",
+          match_id, match_guard.player1, match_guard.player2
+        ),
+      )
+      .await;
     }
 
     let mut loser = String::new();

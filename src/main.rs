@@ -326,6 +326,8 @@ async fn handle_connection(
       sd.clients.write().await.remove(&username);
       sd.usernames.write().await.remove(&addr);
 
+      sd.broadcast(&format!("DISCONNECT:{}", username)).await;
+
       break;
     }
   }
