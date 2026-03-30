@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use tracing::info;
 
 use crate::{server::Server, *};
 
@@ -122,8 +121,6 @@ impl Tournament for RoundRobin {
   }
 
   async fn inform_winner(&mut self, winner: String, match_id: u32, _: String, _: String) {
-    info!("RoundRobin: told winner was \"{}\"", winner);
-
     if winner.is_empty() {
       return;
     }
@@ -214,6 +211,28 @@ impl Tournament for RoundRobin {
 
   fn get_players(&self) -> Vec<String> {
     self.usernames.clone()
+  }
+  
+  fn get_winner(&self) -> Option<String> {
+    if !self.is_completed() {
+      return None;
+    }
+
+    let mut best_score = 0;
+    let mut winner = None;
+
+    for (_, (username, score)) in self.players.iter() {
+      if *score > best_score {
+        best_score = *score;
+        winner = Some(username.clone());
+      }
+    }
+
+    winner
+  }
+  
+  fn get_data(&self) -> Option<String> {
+    None
   }
 
   fn get_type(&self) -> String {

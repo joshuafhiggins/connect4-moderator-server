@@ -25,5 +25,7 @@ pub trait Tournament {
   fn contains_player(&self, username: String) -> bool;
   fn is_completed(&self) -> bool;
   fn get_players(&self) -> Vec<String>;
+  fn get_winner(&self) -> Option<String>;
+  fn get_data(&self) -> Option<String>;
   fn get_type(&self) -> String;
 }

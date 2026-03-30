@@ -21,6 +21,7 @@ pub struct KnockoutBracket {
   pub matches: Matches,
   pub observers: Observers,
   pub usernames: Vec<String>,
+  pub data: Vec<Vec<String>>,
 }
 
 impl KnockoutBracket {
@@ -112,6 +113,7 @@ impl Tournament for KnockoutBracket {
       matches: server.matches.clone(),
       observers: server.observers.clone(),
       usernames: ready_players.to_vec(),
+      data: Vec::new(),
     }
   }
 
@@ -125,6 +127,7 @@ impl Tournament for KnockoutBracket {
     }
 
     if self.blitz_round_robin.completed && !self.started {
+      self.started = true;
       *server.waiting_timeout.write().await = self.previous_wait;
 
       let mut players = Vec::new();
@@ -132,25 +135,29 @@ impl Tournament for KnockoutBracket {
         players.push((player.0.clone(), player.1, false));
       }
 
-      players.sort_by(|a, b| b.1.cmp(&a.1));
+      players.sort_by(|a, b| a.1.cmp(&b.1));
       self.players = players;
 
       for player in &self.players {
         self.pairings.push(player.0.clone());
       }
 
+      self.data.push(self.pairings.clone());
       self.create_matches().await;
-
-      self.started = true;
+      broadcast_message(&self.observers, &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap())).await;
       return;
     }
 
-    if self.pairings.len() == 1 {
-      self.completed = true;
-    } else {
+    if self.started {
       self.pairings.retain(|p| !p.is_empty());
-      self.create_matches().await;
-    }
+      if self.pairings.len() == 1 {
+        self.completed = true;
+      } else {
+        self.data.push(self.pairings.clone());
+        self.create_matches().await;
+        broadcast_message(&self.observers, &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap())).await;
+      }
+    }  
   }
 
   async fn start(&mut self, server: &Server) {
@@ -321,6 +328,36 @@ impl Tournament for KnockoutBracket {
 
   fn get_players(&self) -> Vec<String> {
     self.usernames.clone()
+  }
+  
+  fn get_winner(&self) -> Option<String> {
+    if self.completed {
+      return Some(self.pairings[0].clone());
+    }
+
+    None
+  }
+  
+  fn get_data(&self) -> Option<String> {
+    if !self.started {
+      return None;
+    }
+    
+    let mut message = String::new();
+    for round in self.data.iter() {
+      for player in round.iter() {
+        message += player;
+        message += ",";
+      }
+      message.pop();
+      message.push('|');
+    }
+    
+    if self.data.len() > 0 {
+      message.pop();
+    }
+
+    Some(message)
   }
 
   fn get_type(&self) -> String {

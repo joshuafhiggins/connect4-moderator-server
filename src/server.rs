@@ -624,9 +624,11 @@ impl Server {
               let _ = send(&player.connection, "TOURNAMENT:END");
             }
 
+            let tournament_winner = tourney.read().await.get_winner().unwrap();
             *tournament_guard = None;
 
             self.broadcast("TOURNAMENT:END").await;
+            self.broadcast(&format!("TOURNAMENT:WINNER:{}", tournament_winner)).await;
           }
         }
       }
@@ -908,9 +910,11 @@ impl Server {
           let _ = send(&player.connection, "TOURNAMENT:END");
         }
 
+        let tournament_winner = tourney.read().await.get_winner().unwrap();
         *tournament_guard = None;
 
         self.broadcast("TOURNAMENT:END").await;
+        self.broadcast(&format!("TOURNAMENT:WINNER:{}", tournament_winner)).await;
       }
     }
     Ok(())
@@ -1043,9 +1047,11 @@ impl Server {
             let _ = send(&player.connection, "TOURNAMENT:END");
           }
 
+          let tournament_winner = tourney.read().await.get_winner().unwrap();
           *tournament_guard = None;
 
           self.broadcast("TOURNAMENT:END").await;
+          self.broadcast(&format!("TOURNAMENT:WINNER:{}", tournament_winner)).await;
         }
       }
     } else {
@@ -1142,6 +1148,16 @@ impl Server {
           msg += tournament.as_ref().unwrap().read().await.get_type().as_str();
         } else {
           msg += "false";
+        }
+      }
+      "TOURNAMENT_DATA" => {
+        let tournament = self.tournament.read().await.clone();
+        if tournament.is_some() {
+          let tourney_guard = tournament.as_ref().unwrap().read().await;
+          let data = tourney_guard.get_data();
+          if let Some(data) = data {
+            msg += &data;
+          }
         }
       }
       "MOVE_WAIT" => {
