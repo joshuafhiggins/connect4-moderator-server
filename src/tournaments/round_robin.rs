@@ -13,6 +13,8 @@ pub struct RoundRobin {
   pub top_half: Vec<ID>,
   pub bottom_half: Vec<ID>,
   pub completed: bool,
+  pub total_rounds: usize,
+  pub rounds_played: usize,
   pub current_matches: Vec<ID>,
   pub usernames: Vec<String>,
   pub observers: Observers,
@@ -22,19 +24,21 @@ impl RoundRobin {
   async fn create_matches(&mut self, clients: &Clients, matches: &Matches) {
     let clients_guard = clients.read().await;
     for (i, id) in self.top_half.iter().enumerate() {
-      let player1_username = self.players.get(id).unwrap();
-      let player2_username = self.players.get(self.bottom_half.get(i).unwrap());
-
-      if player2_username.is_none() {
+      let Some(player1_username) = self.players.get(id) else {
         continue;
-      }
-      let player2_addr = player2_username.unwrap();
+      };
+      let Some(player2_id) = self.bottom_half.get(i) else {
+        continue;
+      };
+      let Some(player2_username) = self.players.get(player2_id) else {
+        continue;
+      };
 
       let match_id: u32 = gen_match_id(matches).await;
       let new_match = Arc::new(RwLock::new(Match::new(
         match_id,
         player1_username.0.clone(),
-        player2_addr.0.clone(),
+        player2_username.0.clone(),
         false,
       )));
 
@@ -59,7 +63,7 @@ impl RoundRobin {
       }
       drop(player1);
 
-      let mut player2 = clients_guard.get(&player2_addr.0).unwrap().write().await;
+      let mut player2 = clients_guard.get(&player2_username.0).unwrap().write().await;
       player2.current_match = Some(match_id);
       player2.ready = false;
       broadcast_message(
@@ -68,7 +72,7 @@ impl RoundRobin {
       )
       .await;
 
-      if match_guard.player1 == player2_addr.0 {
+      if match_guard.player1 == player2_username.0 {
         player2.color = Color::Red;
         let _ = send(&player2.connection, "GAME:START:1");
       } else {
@@ -98,22 +102,27 @@ impl Tournament for RoundRobin {
       top_half: Vec::new(),
       bottom_half: Vec::new(),
       completed: false,
+      total_rounds: 0,
+      rounds_played: 0,
       current_matches: Vec::new(),
       usernames: ready_players.to_vec(),
       observers: server.observers.clone(),
     };
 
     let size = ready_players.len();
+    let total_slots = if size % 2 == 0 { size } else { size + 1 };
+    result.total_rounds = if size < 2 { 0 } else { total_slots - 1 };
+    result.completed = result.total_rounds == 0;
 
     for (id, player) in ready_players.iter().enumerate() {
       result.players.insert(id as u32, (player.clone(), 0));
     }
 
-    for i in 0..size / 2 {
+    for i in 0..total_slots / 2 {
       result.top_half.push(i as u32);
     }
 
-    for i in size / 2..size {
+    for i in total_slots / 2..total_slots {
       result.bottom_half.push(i as u32);
     }
 
@@ -140,27 +149,11 @@ impl Tournament for RoundRobin {
       return;
     }
 
-    if self.top_half.len() <= 1 || self.bottom_half.is_empty() {
-      self.completed = true;
-      return;
-    }
-
-    let last_from_top = self.top_half.pop().unwrap();
-    let first_from_bottom = self.bottom_half.remove(0);
-
-    self.top_half.insert(1, first_from_bottom);
-    self.bottom_half.push(last_from_top);
-
-    let expected_bottom_start = self.top_half.len() as u32;
-    if self.top_half[1] == 1 && self.bottom_half[0] == expected_bottom_start {
-      self.completed = true;
-    }
-
     let clients_guard = server.clients.read().await;
     let mut player_scores: Vec<(String, u32)> = Vec::new();
-    for (_, player_addr) in self.players.iter() {
-      let player = clients_guard.get(&player_addr.0).unwrap().read().await;
-      player_scores.push((player.username.clone(), player_addr.1));
+    for (_, username) in self.players.iter() {
+      let player = clients_guard.get(&username.0).unwrap().read().await;
+      player_scores.push((player.username.clone(), username.1));
     }
     drop(clients_guard);
 
@@ -175,12 +168,27 @@ impl Tournament for RoundRobin {
 
     server.broadcast(&message).await;
 
-    if !self.is_completed() {
-      self.create_matches(&server.clients, &server.matches).await;
+    if self.rounds_played >= self.total_rounds {
+      self.completed = true;
+      return;
     }
+
+    let last_from_top = self.top_half.pop().unwrap();
+    let first_from_bottom = self.bottom_half.remove(0);
+
+    self.top_half.insert(1, first_from_bottom);
+    self.bottom_half.push(last_from_top);
+
+    self.rounds_played += 1;
+    self.create_matches(&server.clients, &server.matches).await;
   }
 
   async fn start(&mut self, server: &Server) {
+    if self.completed {
+      return;
+    }
+
+    self.rounds_played = 1;
     self.create_matches(&server.clients, &server.matches).await;
   }
 
