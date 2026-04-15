@@ -2,6 +2,7 @@ import asyncio
 import websockets
 from websockets.exceptions import ConnectionClosed
 from wakepy import keep
+from agent import Agent
 
 DEFAULT_SERVER_URL = "wss://connect4.abunchofknowitalls.com"
 RECONNECT_INTERVAL_SECONDS = 5
@@ -11,12 +12,10 @@ MAX_RECONNECT_ATTEMPTS = (
   // RECONNECT_INTERVAL_SECONDS
 )
 
-from agent import Agent
-
 async def gameloop(socket):
   player = Agent()
 
-  while not socket.closed:  # While game is active, continually anticipate messages
+  while True:  # Receive messages until the connection closes
     message = (await socket.recv()).split(":")  # Receive message from server
 
     match message[0]:
