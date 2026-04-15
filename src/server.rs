@@ -1160,6 +1160,10 @@ impl Server {
           }
         }
       }
+      "BRACKET_PAIRINGS" => {
+        let file = std::fs::read_to_string("bracket_pairings.txt").unwrap_or_default();
+        msg += file.replace("\n", ",").as_str();
+      }
       "MOVE_WAIT" => {
         let wait_time = *self.waiting_timeout.read().await as f64 / 1000f64;
         msg += wait_time.to_string().as_str();
@@ -1211,6 +1215,14 @@ impl Server {
           return Err(anyhow::anyhow!("ERROR:INVALID:SET"));
         }
         *self.max_timeout.write().await = (max_time.unwrap() * 1000.0) as u64;
+      }
+      "BRACKET_PAIRINGS" => {
+        let file = data_value.replace(",", "\n");
+        let result = std::fs::write("bracket_pairings.txt", file);
+        match result {
+          Ok(_) => (),
+          Err(_) => return Err(anyhow::anyhow!("ERROR:INVALID:SET")),
+        }
       }
       &_ => return Err(anyhow::anyhow!("ERROR:INVALID:SET")),
     }

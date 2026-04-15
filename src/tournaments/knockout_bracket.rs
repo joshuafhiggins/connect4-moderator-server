@@ -17,6 +17,7 @@ pub struct KnockoutBracket {
   pub previous_wait: u64,
   pub completed: bool,
   pub started: bool,
+  pub skip_round_robin: bool,
   pub clients: Clients,
   pub matches: Matches,
   pub observers: Observers,
@@ -31,7 +32,13 @@ impl KnockoutBracket {
     let mut i = 0;
     while i < self.pairings.len() {
       let player1_username = self.pairings[i].clone();
-      let player2_username = self.pairings[i + 1].clone();
+      let player2_username = self.pairings.get(i + 1);
+
+      if player2_username.is_none() {
+        break;
+      }
+
+      let player2_username = player2_username.unwrap().clone();
 
       let match_id: u32 = gen_match_id(&self.matches).await;
       self.current_matches.push(match_id);
@@ -98,8 +105,27 @@ impl KnockoutBracket {
 impl Tournament for KnockoutBracket {
   async fn new(ready_players: &[String], server: &Server) -> KnockoutBracket {
     let previous_wait = server.waiting_timeout.read().await.clone();
+    let bracket_file = std::fs::read_to_string("bracket_pairings.txt").unwrap_or_default();
+    let bracket_players = bracket_file.split('\n').collect::<Vec<_>>();
+    let mut skip_round_robin =
+      !bracket_players.is_empty() && bracket_players.len() == ready_players.len();
 
-    *server.waiting_timeout.write().await = 5;
+    if skip_round_robin {
+      for player in bracket_players {
+        let mut player_match = false;
+        for ready_player in ready_players {
+          if player == ready_player {
+            player_match = true;
+            break;
+          }
+        }
+
+        if !player_match {
+          skip_round_robin = false;
+          break;
+        }
+      }
+    }
 
     KnockoutBracket {
       blitz_round_robin: RoundRobin::new(ready_players, server).await,
@@ -109,6 +135,7 @@ impl Tournament for KnockoutBracket {
       previous_wait,
       completed: false,
       started: false,
+      skip_round_robin,
       clients: server.clients.clone(),
       matches: server.matches.clone(),
       observers: server.observers.clone(),
@@ -144,7 +171,11 @@ impl Tournament for KnockoutBracket {
 
       self.data.push(self.pairings.clone());
       self.create_matches().await;
-      broadcast_message(&self.observers, &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap())).await;
+      broadcast_message(
+        &self.observers,
+        &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
+      )
+      .await;
       return;
     }
 
@@ -155,13 +186,39 @@ impl Tournament for KnockoutBracket {
       } else {
         self.data.push(self.pairings.clone());
         self.create_matches().await;
-        broadcast_message(&self.observers, &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap())).await;
+        broadcast_message(
+          &self.observers,
+          &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
+        )
+        .await;
       }
-    }  
+    }
   }
 
   async fn start(&mut self, server: &Server) {
-    self.blitz_round_robin.start(server).await;
+    if self.skip_round_robin {
+      let bracket_file = std::fs::read_to_string("bracket_pairings.txt").unwrap_or_default();
+      self.blitz_round_robin.completed = true;
+      self.started = true;
+
+      let mut i = 0;
+      bracket_file.split('\n').into_iter().for_each(|line| {
+        self.players.push((line.to_string(), i, false));
+        self.pairings.push(line.to_string());
+        i += 1;
+      });
+
+      self.data.push(self.pairings.clone());
+      self.create_matches().await;
+      broadcast_message(
+        &self.observers,
+        &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
+      )
+      .await;
+    } else {
+      *server.waiting_timeout.write().await = 5;
+      self.blitz_round_robin.start(server).await;
+    }
   }
 
   async fn cancel(&mut self, server: &Server) {
@@ -329,7 +386,7 @@ impl Tournament for KnockoutBracket {
   fn get_players(&self) -> Vec<String> {
     self.usernames.clone()
   }
-  
+
   fn get_winner(&self) -> Option<String> {
     if self.completed {
       return Some(self.pairings[0].clone());
@@ -337,12 +394,12 @@ impl Tournament for KnockoutBracket {
 
     None
   }
-  
+
   fn get_data(&self) -> Option<String> {
     if !self.started {
       return None;
     }
-    
+
     let mut message = String::new();
     for round in self.data.iter() {
       for player in round.iter() {
@@ -352,7 +409,7 @@ impl Tournament for KnockoutBracket {
       message.pop();
       message.push('|');
     }
-    
+
     if self.data.len() > 0 {
       message.pop();
     }

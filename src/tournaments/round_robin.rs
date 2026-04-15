@@ -40,7 +40,7 @@ impl RoundRobin {
 
       self.current_matches.push(match_id.clone());
       let match_guard = new_match.read().await;
-      
+
       let mut player1 = clients_guard.get(&player1_username.0).unwrap().write().await;
       player1.current_match = Some(match_id);
       player1.ready = false;
@@ -212,7 +212,7 @@ impl Tournament for RoundRobin {
   fn get_players(&self) -> Vec<String> {
     self.usernames.clone()
   }
-  
+
   fn get_winner(&self) -> Option<String> {
     if !self.is_completed() {
       return None;
@@ -230,7 +230,7 @@ impl Tournament for RoundRobin {
 
     winner
   }
-  
+
   fn get_data(&self) -> Option<String> {
     None
   }

@@ -28,3 +28,5 @@ target
 .env
 
 node_modules/
+
+bracket_pairings.txt
