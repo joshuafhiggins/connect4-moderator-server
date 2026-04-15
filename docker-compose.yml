@@ -1,0 +1,9 @@
+services:
+  connect4-server:
+    env_file:
+      - ./.env
+    container_name: connect4-server
+    restart: unless-stopped
+    ports:
+      - 5102:8080
+    image: joshuafhiggins/connect4-server

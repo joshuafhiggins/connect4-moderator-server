@@ -4,7 +4,7 @@ from websockets.exceptions import ConnectionClosed
 from wakepy import keep
 from agent import Agent
 
-DEFAULT_SERVER_URL = "wss://connect4.abunchofknowitalls.com"
+DEFAULT_SERVER_URL = "wss://connect4.abunchofknowitalls.com/ws"
 RECONNECT_INTERVAL_SECONDS = 5
 RECONNECT_TIMEOUT_SECONDS = 60
 MAX_RECONNECT_ATTEMPTS = (
