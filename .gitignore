@@ -24,9 +24,10 @@ target
 # Added by cargo
 
 /target
+/__pycache__
 
 .env
 
-node_modules/
+/node_modules
 
 bracket_pairings.txt
