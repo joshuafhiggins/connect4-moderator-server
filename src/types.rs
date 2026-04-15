@@ -88,6 +88,19 @@ impl Match {
     }
   }
 
+  pub fn new_with_order(id: u32, player1: String, player2: String, demo_mode: bool) -> Match {
+    Match {
+      id,
+      demo_mode,
+      board: vec![vec![Color::None; 6]; 7],
+      ledger: Vec::new(),
+      wait_thread: None,
+      timeout_thread: None,
+      player1,
+      player2,
+    }
+  }
+
   pub fn place_token(&mut self, color: Color, column: usize) {
     for i in 0..6 {
       if self.board[column][i] == Color::None {

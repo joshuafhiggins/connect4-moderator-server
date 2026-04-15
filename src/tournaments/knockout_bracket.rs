@@ -276,78 +276,86 @@ impl Tournament for KnockoutBracket {
         }
       }
 
-      if player1_track.2 {
+      if player1_track.2 || player2_track.2 {
         if player1_track.1 < player2_track.1 {
           winner = player2_track.0.clone();
         } else {
           winner = player1_track.0.clone();
         }
-      }
-
-      let match_id: u32 = gen_match_id(&self.matches).await;
-      self.current_matches.push(match_id);
-      let new_match = Arc::new(RwLock::new(Match::new(
-        match_id,
-        player1.clone(),
-        player2.clone(),
-        false,
-      )));
-
-      let match_guard = new_match.read().await;
-      let clients_guard = self.clients.read().await;
-      let mut player1 = clients_guard.get(&player1).unwrap().write().await;
-
-      player1.current_match = Some(match_id);
-      player1.ready = false;
-      let player1_name = player1.username.clone();
-
-      if match_guard.player1 == player1.username {
-        player1.color = Color::Red;
-        let _ = send(&player1.connection, "GAME:START:1");
       } else {
-        player1.color = Color::Yellow;
-        let _ = send(&player1.connection, "GAME:START:0");
+        for player in self.players.iter_mut() {
+          if player.0 == player1 || player.0 == player2 {
+            player.2 = true;
+          }
+        }
+
+        let new_match_id: u32 = gen_match_id(&self.matches).await;
+        self.current_matches.push(new_match_id);
+        let new_match = Arc::new(RwLock::new(Match::new_with_order(
+          new_match_id,
+          player2.clone(),
+          player1.clone(),
+          false,
+        )));
+
+        let match_guard = new_match.read().await;
+        let clients_guard = self.clients.read().await;
+        let mut player1 = clients_guard.get(&player1).unwrap().write().await;
+
+        player1.current_match = Some(new_match_id);
+        player1.ready = false;
+        let player1_name = player1.username.clone();
+
+        if match_guard.player1 == player1.username {
+          player1.color = Color::Red;
+          let _ = send(&player1.connection, "GAME:START:1");
+        } else {
+          player1.color = Color::Yellow;
+          let _ = send(&player1.connection, "GAME:START:0");
+        }
+
+        drop(player1);
+
+        let mut player2 = clients_guard.get(&player2).unwrap().write().await;
+
+        player2.current_match = Some(new_match_id);
+        player2.ready = false;
+        let player2_name = player2.username.clone();
+
+        if match_guard.player1 == player2.username {
+          player2.color = Color::Red;
+          let _ = send(&player2.connection, "GAME:START:1");
+        } else {
+          player2.color = Color::Yellow;
+          let _ = send(&player2.connection, "GAME:START:0");
+        }
+
+        drop(player2);
+
+        broadcast_message(
+          &self.observers,
+          &format!("READY:{}:{}", player1_name, false),
+        )
+        .await;
+        broadcast_message(
+          &self.observers,
+          &format!("READY:{}:{}", player2_name, false),
+        )
+        .await;
+
+        self.matches.write().await.insert(new_match_id, new_match.clone());
+        broadcast_message(
+          &self.observers,
+          &format!(
+            "GAME:START:{},{},{}",
+            new_match_id, match_guard.player1, match_guard.player2
+          ),
+        )
+        .await;
+
+        self.current_matches.retain(|v| *v != match_id);
+        return;
       }
-
-      drop(player1);
-
-      let mut player2 = clients_guard.get(&player2).unwrap().write().await;
-
-      player2.current_match = Some(match_id);
-      player2.ready = false;
-      let player2_name = player2.username.clone();
-
-      if match_guard.player1 == player2.username {
-        player2.color = Color::Red;
-        let _ = send(&player2.connection, "GAME:START:1");
-      } else {
-        player2.color = Color::Yellow;
-        let _ = send(&player2.connection, "GAME:START:0");
-      }
-
-      drop(player2);
-
-      broadcast_message(
-        &self.observers,
-        &format!("READY:{}:{}", player1_name, false),
-      )
-      .await;
-      broadcast_message(
-        &self.observers,
-        &format!("READY:{}:{}", player2_name, false),
-      )
-      .await;
-
-      self.current_matches.push(match_id);
-      self.matches.write().await.insert(match_id, new_match.clone());
-      broadcast_message(
-        &self.observers,
-        &format!(
-          "GAME:START:{},{},{}",
-          match_id, match_guard.player1, match_guard.player2
-        ),
-      )
-      .await;
     }
 
     let mut loser = String::new();

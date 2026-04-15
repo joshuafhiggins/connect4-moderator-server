@@ -507,6 +507,8 @@ impl Server {
         client.color = Color::None;
         drop(client);
 
+        self.matches.write().await.remove(&current_match_id).unwrap();
+
         let mut tournament_guard = self.tournament.write().await;
         let tourney = tournament_guard.as_mut().unwrap();
         tourney
@@ -520,8 +522,6 @@ impl Server {
           )
           .await;
         drop(tournament_guard);
-
-        self.matches.write().await.remove(&current_match_id).unwrap();
       }
       return Ok(());
     }
@@ -588,6 +588,7 @@ impl Server {
       }
 
       matches_guard.remove(&current_match_id).unwrap();
+      drop(matches_guard);
 
       if self.tournament.read().await.is_some() {
         let mut tournament_guard = self.tournament.write().await;
@@ -604,8 +605,7 @@ impl Server {
           .inform_winner(winner, current_match_id, player1.clone(), player2.clone())
           .await;
 
-        if matches_guard.is_empty() {
-          drop(matches_guard);
+        if self.matches.read().await.is_empty() {
           drop(clients_guard);
 
           tourney.write().await.next(&self).await;
@@ -744,12 +744,12 @@ impl Server {
           opponent.color = Color::None;
           drop(opponent);
 
+          matches.write().await.remove(&match_id).unwrap();
+
           let mut tournament_guard = tournament.write().await;
           let tourney = tournament_guard.as_mut().unwrap();
           tourney.write().await.inform_winner(client_username, match_id, player1, player2).await;
           drop(tournament_guard);
-
-          matches.write().await.remove(&match_id).unwrap();
         }
       }
     }));
