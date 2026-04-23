@@ -31,3 +31,7 @@ target
 /node_modules
 
 bracket_pairings.txt
+
+.cursor/
+.claude/
+.codex/

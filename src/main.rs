@@ -305,33 +305,39 @@ async fn handle_connection(
 
   // Remove and terminate any matches
   // We may not be a client disconnecting, do this check
-  let clients_guard = sd.clients.read().await;
-  for client in clients_guard.values() {
-    let client = client.read().await;
-    if client.addr == addr {
-      let username = client.username.clone();
-      let tournament_guard = sd.tournament.read().await;
-      if client.current_match.is_some() {
-        sd.disconnected_clients.write().await.push(username.clone());
-      } else if tournament_guard.is_some() {
-        let tourney = tournament_guard.clone().unwrap();
-        if tourney.read().await.contains_player(username.clone()) {
-          sd.disconnected_clients.write().await.push(username.clone());
-        }
+  if let Some(username) = sd.usernames.read().await.get(&addr).cloned() {
+    let tournament_guard = sd.tournament.read().await;
+    let client = sd.clients.read().await.get(&username).cloned().unwrap();
+    let client = client.write().await;
+    if client.current_match.is_some() {
+      let current_match = sd.matches.read().await.get(&client.current_match.unwrap()).cloned().unwrap();
+      let current_match = current_match.read().await;
+      if current_match.timeout_thread.is_some() {
+        current_match.timeout_thread.as_ref().unwrap().abort();
       }
-
-      drop(client);
-      drop(clients_guard);
-
+      
+      if current_match.demo_mode {
+        sd.matches.write().await.remove(&current_match.id);
+        sd.broadcast(&format!("GAME:{}:TERMINATED", current_match.id)).await;
+        sd.clients.write().await.remove(&username);
+      } else {
+        sd.disconnected_clients.write().await.push(username.clone());        
+      }
+    } else if tournament_guard.is_some() {
+      let tourney = tournament_guard.clone().unwrap();
+      if tourney.read().await.contains_player(username.clone()) {
+        sd.disconnected_clients.write().await.push(username.clone());
+      } else {
+        sd.clients.write().await.remove(&username);
+      }
+    } else {
       sd.clients.write().await.remove(&username);
-      sd.usernames.write().await.remove(&addr);
-
-      sd.broadcast(&format!("DISCONNECT:{}", username)).await;
-
-      break;
     }
+
+    sd.broadcast(&format!("DISCONNECT:{}", username)).await;
   }
 
+  sd.usernames.write().await.remove(&addr);
   sd.observers.write().await.remove(&addr);
 
   let mut admin_guard = sd.admin.write().await;

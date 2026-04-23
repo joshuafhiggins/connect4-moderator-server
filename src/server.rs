@@ -63,11 +63,7 @@ impl Server {
       )));
     }
 
-    let mut reconnecting = false;
-    let disconnected_guard = self.disconnected_clients.read().await;
-    if disconnected_guard.contains(&requested_username) {
-      reconnecting = true;
-    }
+    let reconnecting = self.disconnected_clients.read().await.contains(&requested_username);
 
     let clients_guard = self.clients.read().await;
     let existing_client = clients_guard.get(&requested_username).cloned();
@@ -176,15 +172,22 @@ impl Server {
 
       let _ = send(&tx, "RECONNECT:ACK");
 
-      let matches_guard = self.matches.read().await;
-      let the_match = matches_guard.get(&client.current_match.unwrap()).unwrap().read().await;
-
-      let last = the_match.ledger.last();
-      if last.is_some() && last.unwrap().0 != client.color {
-        let _ = send(
-          &tx,
-          &format!("OPPONENT:{}", the_match.ledger.last().unwrap().1),
-        );
+      if let Some(current_match_id) = client.current_match {
+        let matches_guard = self.matches.read().await;
+        let the_match = matches_guard.get(&current_match_id).unwrap().read().await;
+        
+        let last = the_match.ledger.last();
+        if last.is_some() && last.unwrap().0 != client.color {
+          let _ = send(
+            &tx,
+            &format!("OPPONENT:{}", the_match.ledger.last().unwrap().1),
+          );
+        } else if last.is_none() && client.color == Color::Red {
+          let _ = send(&tx, "GAME:START:1");
+        }
+      } else {
+        // Clear they're state just in case, even if it's not terminated
+        let _ = send(&tx, "GAME:TERMINATED");
       }
     } else {
       return Err(anyhow::anyhow!(format!(
@@ -281,53 +284,55 @@ impl Server {
       let mut client = clients_guard.get(&username).unwrap().write().await;
       let mut opponent = clients_guard.get(&opponent_username).unwrap().write().await;
 
-      let match_id: u32 = gen_match_id(&self.matches).await;
-      let new_match = Arc::new(RwLock::new(Match::new(
-        match_id,
-        username.clone(),
-        opponent_username,
-        false,
-      )));
-      self.matches.write().await.insert(match_id, new_match.clone());
-      let match_guard = new_match.read().await;
-      self
-        .broadcast(&format!(
-          "GAME:START:{},{},{}",
-          match_id, match_guard.player1, match_guard.player2
-        ))
-        .await;
-      drop(match_guard);
+      if opponent.ready {
+        let match_id: u32 = gen_match_id(&self.matches).await;
+        let new_match = Arc::new(RwLock::new(Match::new(
+          match_id,
+          username.clone(),
+          opponent_username,
+          false,
+        )));
+        self.matches.write().await.insert(match_id, new_match.clone());
+        let match_guard = new_match.read().await;
+        self
+          .broadcast(&format!(
+            "GAME:START:{},{},{}",
+            match_id, match_guard.player1, match_guard.player2
+          ))
+          .await;
+        drop(match_guard);
 
-      client.ready = false;
-      client.current_match = Some(match_id);
-      client.color = if new_match.read().await.player1 == username {
-        let _ = send(&tx, "GAME:START:1");
-        let _ = send(&opponent.connection, "GAME:START:0");
-        Color::Red
-      } else {
-        let _ = send(&tx, "GAME:START:0");
-        let _ = send(&opponent.connection, "GAME:START:1");
-        Color::Yellow
-      };
+        client.ready = false;
+        client.current_match = Some(match_id);
+        client.color = if new_match.read().await.player1 == username {
+          let _ = send(&tx, "GAME:START:1");
+          let _ = send(&opponent.connection, "GAME:START:0");
+          Color::Red
+        } else {
+          let _ = send(&tx, "GAME:START:0");
+          let _ = send(&opponent.connection, "GAME:START:1");
+          Color::Yellow
+        };
 
-      opponent.ready = false;
-      opponent.current_match = Some(match_id);
-      opponent.color = !client.color;
-      let opponent_username = opponent.username.clone();
+        opponent.ready = false;
+        opponent.current_match = Some(match_id);
+        opponent.color = !client.color;
+        let opponent_username = opponent.username.clone();
 
-      self
-        .reservations
-        .write()
-        .await
-        .retain(|(p1, p2)| !(p1 == &client.username && p2 == &opponent.username));
+        self
+          .reservations
+          .write()
+          .await
+          .retain(|(p1, p2)| !(p1 == &client.username && p2 == &opponent.username));
 
-      drop(opponent);
-      drop(client);
-      drop(clients_guard);
-      self.broadcast(&format!("READY:{}:{}", username, false)).await;
-      self.broadcast(&format!("READY:{}:{}", opponent_username, false)).await;
+        drop(opponent);
+        drop(client);
+        drop(clients_guard);
+        self.broadcast(&format!("READY:{}:{}", username, false)).await;
+        self.broadcast(&format!("READY:{}:{}", opponent_username, false)).await;
 
-      return Ok(());
+        return Ok(());
+      }
     }
 
     let clients_guard = self.clients.read().await;
