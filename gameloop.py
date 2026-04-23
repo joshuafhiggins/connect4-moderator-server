@@ -21,6 +21,8 @@ async def gameloop(socket):
     match message[0]:
       case "CONNECT":
         await socket.send("READY")
+      case "RECONNECT":
+        await socket.send("READY")
 
       case "GAME":
         if message[1] == "START":

@@ -308,7 +308,9 @@ async fn handle_connection(
   if let Some(username) = sd.usernames.read().await.get(&addr).cloned() {
     let tournament_guard = sd.tournament.read().await;
     let client = sd.clients.read().await.get(&username).cloned().unwrap();
-    let client = client.write().await;
+    let mut client = client.write().await;
+    client.ready = false;
+    
     if client.current_match.is_some() {
       let current_match = sd.matches.read().await.get(&client.current_match.unwrap()).cloned().unwrap();
       let current_match = current_match.read().await;

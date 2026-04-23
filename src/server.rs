@@ -170,8 +170,6 @@ impl Server {
       client.addr = addr;
       client.connection = tx.clone();
 
-      let _ = send(&tx, "RECONNECT:ACK");
-
       if let Some(current_match_id) = client.current_match {
         let matches_guard = self.matches.read().await;
         let the_match = matches_guard.get(&current_match_id).unwrap().read().await;
@@ -189,6 +187,15 @@ impl Server {
         // Clear they're state just in case, even if it's not terminated
         let _ = send(&tx, "GAME:TERMINATED");
       }
+      
+      let tournament = self.tournament.read().await.as_ref().cloned();
+      if let Some(tourney) = tournament {
+        let tourney = tourney.read().await;
+        if !tourney.contains_player(requested_username) {
+          let _ = send(&tx, "RECONNECT:ACK");
+        }
+      }
+      
     } else {
       return Err(anyhow::anyhow!(format!(
         "ERROR:INVALID:RECONNECT:{}",
@@ -269,7 +276,8 @@ impl Server {
     let username = username.unwrap();
 
     if clients_guard.get(&username).unwrap().read().await.ready {
-      return Err(anyhow::anyhow!("ERROR:INVALID:READY"));
+      let _ = send(&tx, "READY:ACK");
+      return Ok(());
     }
 
     let mut client = clients_guard.get(&username).unwrap().write().await;
