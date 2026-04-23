@@ -101,42 +101,24 @@ impl Server {
     let mut client = client_guard.write().await;
     client.addr = addr;
     client.connection = tx.clone();
-    // I don't think this will fail
-    let match_id = client.current_match.unwrap();
-    let client_color = client.color;
 
-    drop(client);
-
-    let matches_guard = self.matches.read().await;
-    let mut the_match = matches_guard.get(&match_id).unwrap().write().await;
-    if the_match.demo_mode {
-      drop(the_match);
-      drop(matches_guard);
-      self.terminate_match(match_id).await;
-      return Ok(());
-    } else {
-      the_match.ledger.clear();
-      the_match.board = vec![vec![Color::None; 6]; 7];
-      let opponent_username = if the_match.player1 == requested_username {
-        the_match.player2.clone()
+    if let Some(current_match_id) = client.current_match {
+      let current_match = self.matches.read().await.get(&current_match_id).cloned().unwrap();
+      let mut current_match = current_match.write().await;
+      current_match.ledger.clear();
+      current_match.board = vec![vec![Color::None; 6]; 7];
+      let opponent_username = if current_match.player1 == requested_username {
+        current_match.player2.clone()
       } else {
-        the_match.player1.clone()
+        current_match.player1.clone()
       };
-
-      if the_match.wait_thread.is_some() {
-        the_match.wait_thread.as_ref().unwrap().abort();
-      }
-
-      if the_match.timeout_thread.is_some() {
-        the_match.timeout_thread.as_ref().unwrap().abort();
-      }
 
       let clients_guard = self.clients.read().await;
       let opponent = clients_guard.get(&opponent_username).unwrap().read().await;
       let _ = send(&opponent.connection, "GAME:TERMINATED");
       let _ = send(
         &tx,
-        &format!("GAME:START:{}", bool::from(client_color) as u8),
+        &format!("GAME:START:{}", bool::from(client.color) as u8),
       );
       let _ = send(
         &opponent.connection,
@@ -166,6 +148,7 @@ impl Server {
 
     if let Some(client_guard) = found_client {
       self.disconnected_clients.write().await.retain(|name| name != &requested_username);
+      self.usernames.write().await.insert(addr, requested_username.clone());
       let mut client = client_guard.write().await;
       client.addr = addr;
       client.connection = tx.clone();
@@ -173,7 +156,7 @@ impl Server {
       if let Some(current_match_id) = client.current_match {
         let matches_guard = self.matches.read().await;
         let the_match = matches_guard.get(&current_match_id).unwrap().read().await;
-        
+
         let last = the_match.ledger.last();
         if last.is_some() && last.unwrap().0 != client.color {
           let _ = send(
@@ -187,7 +170,7 @@ impl Server {
         // Clear they're state just in case, even if it's not terminated
         let _ = send(&tx, "GAME:TERMINATED");
       }
-      
+
       let tournament = self.tournament.read().await.as_ref().cloned();
       if let Some(tourney) = tournament {
         let tourney = tourney.read().await;
@@ -195,7 +178,6 @@ impl Server {
           let _ = send(&tx, "RECONNECT:ACK");
         }
       }
-      
     } else {
       return Err(anyhow::anyhow!(format!(
         "ERROR:INVALID:RECONNECT:{}",
@@ -1397,18 +1379,25 @@ impl Server {
     self.broadcast(&format!("GAME:{}:TERMINATED", the_match.id)).await;
 
     let clients_guard = self.clients.read().await;
+
     if the_match.player1 != SERVER_PLAYER_USERNAME.to_string() {
-      let mut player1 = clients_guard.get(&the_match.player1).unwrap().write().await;
-      let _ = send(&player1.connection, "GAME:TERMINATED");
-      player1.current_match = None;
-      player1.color = Color::None;
+      let player1 = clients_guard.get(&the_match.player1).cloned();
+      if let Some(player1) = player1 {
+        let mut player1 = player1.write().await;
+        let _ = send(&player1.connection, "GAME:TERMINATED");
+        player1.current_match = None;
+        player1.color = Color::None;
+      }
     }
 
     if the_match.player2 != SERVER_PLAYER_USERNAME.to_string() {
-      let mut player2 = clients_guard.get(&the_match.player2).unwrap().write().await;
-      let _ = send(&player2.connection, "GAME:TERMINATED");
-      player2.current_match = None;
-      player2.color = Color::None;
+      let player2 = clients_guard.get(&the_match.player2).cloned();
+      if let Some(player2) = player2 {
+        let mut player2 = player2.write().await;
+        let _ = send(&player2.connection, "GAME:TERMINATED");
+        player2.current_match = None;
+        player2.color = Color::None;
+      }
     }
     drop(clients_guard);
 

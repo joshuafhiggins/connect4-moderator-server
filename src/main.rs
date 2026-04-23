@@ -310,20 +310,26 @@ async fn handle_connection(
     let client = sd.clients.read().await.get(&username).cloned().unwrap();
     let mut client = client.write().await;
     client.ready = false;
-    
+
     if client.current_match.is_some() {
-      let current_match = sd.matches.read().await.get(&client.current_match.unwrap()).cloned().unwrap();
+      let current_match =
+        sd.matches.read().await.get(&client.current_match.unwrap()).cloned().unwrap();
       let current_match = current_match.read().await;
-      if current_match.timeout_thread.is_some() {
-        current_match.timeout_thread.as_ref().unwrap().abort();
+      if let Some(wait_thread) = &current_match.wait_thread {
+        wait_thread.abort();
       }
-      
+
+      if let Some(timeout_thread) = &current_match.timeout_thread {
+        timeout_thread.abort();
+      }
+
       if current_match.demo_mode {
         sd.matches.write().await.remove(&current_match.id);
         sd.broadcast(&format!("GAME:{}:TERMINATED", current_match.id)).await;
         sd.clients.write().await.remove(&username);
+        sd.broadcast(&format!("DISCONNECT:{}", username)).await;
       } else {
-        sd.disconnected_clients.write().await.push(username.clone());        
+        sd.disconnected_clients.write().await.push(username.clone());
       }
     } else if tournament_guard.is_some() {
       let tourney = tournament_guard.clone().unwrap();
@@ -331,12 +337,12 @@ async fn handle_connection(
         sd.disconnected_clients.write().await.push(username.clone());
       } else {
         sd.clients.write().await.remove(&username);
+        sd.broadcast(&format!("DISCONNECT:{}", username)).await;
       }
     } else {
       sd.clients.write().await.remove(&username);
+      sd.broadcast(&format!("DISCONNECT:{}", username)).await;
     }
-
-    sd.broadcast(&format!("DISCONNECT:{}", username)).await;
   }
 
   sd.usernames.write().await.remove(&addr);
