@@ -179,10 +179,10 @@ impl Server {
         }
       }
     } else {
-      return Err(anyhow::anyhow!(format!(
-        "ERROR:INVALID:RECONNECT:{}",
-        requested_username
-      )));
+      // return Err(anyhow::anyhow!(format!(
+      //   "ERROR:INVALID:RECONNECT:{}",
+      //   requested_username
+      // )));
     }
 
     Ok(())
