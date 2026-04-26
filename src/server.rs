@@ -179,10 +179,7 @@ impl Server {
         }
       }
     } else {
-      // return Err(anyhow::anyhow!(format!(
-      //   "ERROR:INVALID:RECONNECT:{}",
-      //   requested_username
-      // )));
+      return self.handle_connect_cmd(addr, tx, requested_username).await;
     }
 
     Ok(())
