@@ -2,7 +2,17 @@ name: Cargo Format Check
 
 on:
   push:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".rustfmt.toml"
   pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".rustfmt.toml"
 
 jobs:
   cargo-fmt:
