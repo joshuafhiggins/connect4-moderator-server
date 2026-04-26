@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: [actions/checkout](https://github.com)@v4
+        uses: actions/checkout@v4
 
       - name: Log in to GHCR
-        uses: [docker/login-action](https://github.com)@v3
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -25,12 +25,12 @@ jobs:
 
       - name: Extract metadata for Docker
         id: meta
-        uses: [docker/metadata-action](https://github.com)@v5
+        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
 
       - name: Build and push Docker image
-        uses: [docker/build-push-action](https://github.com/docker/build-push-action)@v5
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
