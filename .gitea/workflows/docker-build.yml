@@ -20,9 +20,9 @@ jobs:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: git.abunchofknowitalls.com
-          username: ${{ gitea.actor }}
-          password: ${{ secrets.GITEA_TOKEN }}
+          registry: ${{ env.GITEA_DOMAIN }}
+          username: ${{ env.GITEA_REGISTRY_USER }}
+          password: ${{ secrets.CONTAINER_REGISTRY_TOKEN }}
 
       - name: Extract metadata for Docker
         id: meta
