@@ -1234,6 +1234,10 @@ impl Server {
       return Err(anyhow::anyhow!("ERROR:INVALID:AUTH"));
     }
 
+    if player1_username == player2_username {
+      return Err(anyhow!("ERROR:INVALID:RESERVATION"));
+    }
+
     self.reservations.write().await.push((player1_username.clone(), player2_username.clone()));
 
     let _ = send(
@@ -1273,11 +1277,11 @@ impl Server {
         let player1_name = player1.username.clone();
         player1.current_match = Some(match_id);
         player1.color = if new_match.read().await.player1 == player1_username {
-          let _ = send(&tx, "GAME:START:1");
+          let _ = send(&player1.connection, "GAME:START:1");
           let _ = send(&player2.connection, "GAME:START:0");
           Color::Red
         } else {
-          let _ = send(&tx, "GAME:START:0");
+          let _ = send(&player1.connection, "GAME:START:0");
           let _ = send(&player2.connection, "GAME:START:1");
           Color::Yellow
         };
