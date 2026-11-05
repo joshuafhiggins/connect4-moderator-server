@@ -45,7 +45,7 @@ impl Server {
     tx: UnboundedSender<Message>,
     requested_username: String,
   ) -> Result<(), anyhow::Error> {
-    if requested_username.is_empty() {
+    if self.usernames.read().await.contains_key(&addr) || requested_username.is_empty() {
       return Err(anyhow::anyhow!(format!(
         "ERROR:INVALID:CONNECT:{}",
         requested_username
@@ -108,6 +108,13 @@ impl Server {
     if let Some(current_match_id) = client.current_match {
       let current_match = self.matches.read().await.get(&current_match_id).cloned().unwrap();
       let mut current_match = current_match.write().await;
+      if let Some(task) = current_match.wait_thread.take() {
+        task.abort();
+      }
+      if let Some(task) = current_match.timeout_thread.take() {
+        task.abort();
+      }
+      self.broadcast(&format!("GAME:{}:TERMINATED", current_match_id)).await;
       current_match.ledger.clear();
       current_match.board = vec![vec![Color::None; 6]; 7];
       let opponent_username = if current_match.player1 == requested_username {
@@ -118,7 +125,14 @@ impl Server {
 
       let clients_guard = self.clients.read().await;
       let opponent = clients_guard.get(&opponent_username).unwrap().read().await;
+      let _ = send(&tx, "GAME:TERMINATED");
       let _ = send(&opponent.connection, "GAME:TERMINATED");
+      self
+        .broadcast(&format!(
+          "GAME:START:{},{},{}",
+          current_match_id, current_match.player1, current_match.player2
+        ))
+        .await;
       let _ = send(
         &tx,
         &format!("GAME:START:{}", bool::from(client.color) as u8),
@@ -143,6 +157,10 @@ impl Server {
     tx: UnboundedSender<Message>,
     requested_username: String,
   ) -> Result<(), anyhow::Error> {
+    if self.usernames.read().await.contains_key(&addr) {
+      return Err(anyhow!("ERROR:INVALID:RECONNECT:{}", requested_username));
+    }
+
     let clients_guard = self.clients.read().await;
     let disconnected_guard = self.disconnected_clients.read().await;
     let found_client = if disconnected_guard.contains(&requested_username) {
