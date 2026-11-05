@@ -26,7 +26,7 @@ pub struct KnockoutBracket {
 }
 
 impl KnockoutBracket {
-  async fn create_matches(&mut self) {
+  async fn create_matches(&mut self, server: &Server) {
     let clients_guard = self.clients.read().await;
 
     let mut i = 0;
@@ -95,6 +95,8 @@ impl KnockoutBracket {
         ),
       )
       .await;
+      drop(match_guard);
+      server.arm_timeout(match_id, 0, 0).await;
 
       i += 2
     }
@@ -170,7 +172,7 @@ impl Tournament for KnockoutBracket {
       }
 
       self.data.push(self.pairings.clone());
-      self.create_matches().await;
+      self.create_matches(server).await;
       broadcast_message(
         &self.observers,
         &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
@@ -185,7 +187,7 @@ impl Tournament for KnockoutBracket {
         self.completed = true;
       } else {
         self.data.push(self.pairings.clone());
-        self.create_matches().await;
+        self.create_matches(server).await;
         broadcast_message(
           &self.observers,
           &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
@@ -209,7 +211,7 @@ impl Tournament for KnockoutBracket {
       });
 
       self.data.push(self.pairings.clone());
-      self.create_matches().await;
+      self.create_matches(server).await;
       broadcast_message(
         &self.observers,
         &format!("GET:TOURNAMENT_DATA:{}", self.get_data().unwrap()),
@@ -222,6 +224,7 @@ impl Tournament for KnockoutBracket {
   }
 
   async fn cancel(&mut self, server: &Server) {
+    *server.waiting_timeout.write().await = self.previous_wait;
     if !self.started {
       self.blitz_round_robin.cancel(server).await;
       return;
@@ -251,9 +254,10 @@ impl Tournament for KnockoutBracket {
     match_id: u32,
     player1: String,
     player2: String,
+    server: &Server,
   ) {
     if !self.started {
-      self.blitz_round_robin.inform_winner(winner, match_id, player1, player2).await;
+      self.blitz_round_robin.inform_winner(winner, match_id, player1, player2, server).await;
       return;
     }
 
@@ -353,6 +357,8 @@ impl Tournament for KnockoutBracket {
         )
         .await;
 
+        drop(match_guard);
+        server.arm_timeout(new_match_id, 0, 0).await;
         self.current_matches.retain(|v| *v != match_id);
         return;
       }

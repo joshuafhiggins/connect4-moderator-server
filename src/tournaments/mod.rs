@@ -21,6 +21,7 @@ pub trait Tournament {
     match_id: u32,
     player1: String,
     player2: String,
+    server: &Server,
   );
   fn contains_player(&self, username: String) -> bool;
   fn is_completed(&self) -> bool;
