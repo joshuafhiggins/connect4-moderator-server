@@ -222,6 +222,7 @@ impl Tournament for KnockoutBracket {
   }
 
   async fn cancel(&mut self, server: &Server) {
+    *server.waiting_timeout.write().await = self.previous_wait;
     if !self.started {
       self.blitz_round_robin.cancel(server).await;
       return;
