@@ -20,7 +20,7 @@ jobs:
       - name: Log in to Gitea Container Registry
         uses: docker/login-action@v3
         with:
-          registry: git.abunchofknowitalls.com
+          registry: gitcoffee.dev
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
 
@@ -28,7 +28,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: git.abunchofknowitalls.com/${{ gitea.repository }}
+          images: gitcoffee.dev/${{ gitea.repository }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
