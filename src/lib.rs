@@ -6,7 +6,6 @@ use tokio::sync::{
   RwLock,
 };
 use tokio_tungstenite::tungstenite::Message;
-use tracing::error;
 
 use crate::{
   tournaments::Tournament,

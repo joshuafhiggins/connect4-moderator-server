@@ -21,7 +21,9 @@ pub struct RoundRobin {
 }
 
 impl RoundRobin {
-  async fn create_matches(&mut self, clients: &Clients, matches: &Matches) {
+  async fn create_matches(&mut self, server: &Server) {
+    let clients = &server.clients;
+    let matches = &server.matches;
     let clients_guard = clients.read().await;
     for (i, id) in self.top_half.iter().enumerate() {
       let Some(player1_username) = self.players.get(id) else {
@@ -90,6 +92,8 @@ impl RoundRobin {
         ),
       )
       .await;
+      drop(match_guard);
+      server.arm_timeout(match_id, 0, 0).await;
     }
   }
 }
@@ -129,7 +133,15 @@ impl Tournament for RoundRobin {
     result
   }
 
-  async fn inform_winner(&mut self, winner: String, match_id: u32, _: String, _: String) {
+  async fn inform_winner(
+    &mut self,
+    winner: String,
+    match_id: u32,
+    _: String,
+    _: String,
+    _: &Server,
+  ) {
+    self.current_matches.retain(|id| *id != match_id);
     if winner.is_empty() {
       return;
     }
@@ -140,8 +152,6 @@ impl Tournament for RoundRobin {
         break;
       }
     }
-
-    self.current_matches.retain(|id| !(*id == match_id));
   }
 
   async fn next(&mut self, server: &Server) {
@@ -180,7 +190,7 @@ impl Tournament for RoundRobin {
     self.bottom_half.push(last_from_top);
 
     self.rounds_played += 1;
-    self.create_matches(&server.clients, &server.matches).await;
+    self.create_matches(server).await;
   }
 
   async fn start(&mut self, server: &Server) {
@@ -189,7 +199,7 @@ impl Tournament for RoundRobin {
     }
 
     self.rounds_played = 1;
-    self.create_matches(&server.clients, &server.matches).await;
+    self.create_matches(server).await;
   }
 
   async fn cancel(&mut self, server: &Server) {
