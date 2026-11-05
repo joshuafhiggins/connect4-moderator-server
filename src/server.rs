@@ -124,9 +124,12 @@ impl Server {
       let opponent = clients_guard.get(&opponent_username).unwrap().read().await;
       let _ = send(&tx, "GAME:TERMINATED");
       let _ = send(&opponent.connection, "GAME:TERMINATED");
-      self.broadcast(&format!(
-        "GAME:START:{},{},{}", current_match_id, current_match.player1, current_match.player2
-      )).await;
+      self
+        .broadcast(&format!(
+          "GAME:START:{},{},{}",
+          current_match_id, current_match.player1, current_match.player2
+        ))
+        .await;
       let _ = send(
         &tx,
         &format!("GAME:START:{}", bool::from(client.color) as u8),
